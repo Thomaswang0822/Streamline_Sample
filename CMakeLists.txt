@@ -19,7 +19,7 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.15)
 
 project(StreamlineSample)
 
@@ -36,6 +36,13 @@ set(DONUT_SHADERS_OUTPUT_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/framewor
 if (MSVC)
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /D_ITERATOR_DEBUG_LEVEL=1")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /MP")
+
+  # Set consistent runtime for all components, policy CMP0091 supported in 3.15
+  # https://cmake.org/cmake/help/latest/policy/CMP0091.html
+  cmake_policy(SET CMP0091 NEW)
+  
+  # Global switch
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 endif()
 set(PACKAGE_DIRECTORY "${CMAKE_SOURCE_DIR}/_package")
 

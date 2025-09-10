@@ -1,0 +1,9 @@
+.vs
+.vscode
+build
+out
+_bin
+_build
+
+# streamline sdk should not be tracked or modified
+streamline
