@@ -1067,6 +1067,13 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
             m_RenderTargets = nullptr;
             m_RenderTargets = std::make_unique<RenderTargets>();
             m_RenderTargets->Init(GetDevice(), renderSize, m_DisplaySize, framebuffer->getDesc().colorAttachments[0].texture->getDesc().format);
+
+            // Load hack data
+            auto texCache = GetTextureCache();
+            m_CommandList->open();
+            m_RenderTargets->LoadHackTextures(texCache, m_CommandList);
+            m_CommandList->close();
+
 #ifdef STREAMLINE_FEATURE_DLSS_RR
             if(GetDevice()->getGraphicsAPI() != nvrhi::GraphicsAPI::D3D11)
             {
@@ -1300,11 +1307,38 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
 
     // TAG STREAMLINE RESOURCES
-    NVWrapper::Get().TagResources_General(m_CommandList,
-        m_View->GetChildView(ViewType::PLANAR, 0),
-        m_RenderTargets->MotionVectors,
-        m_RenderTargets->Depth,
-        m_RenderTargets->PreUIColor);
+    auto _check0 = m_RenderTargets->hackPreUIColor->getDesc();
+    auto _check1 = m_RenderTargets->hackLoadedColorsLDR[0]->texture->getDesc();
+    auto _check3 = m_RenderTargets->hackHdrColor->getDesc();
+    auto _check4 = m_RenderTargets->hackLoadedColorsHDR[0]->texture->getDesc();
+    if (m_RenderTargets->hackEnabled) {
+        const TextureSubresourceData& layoutLDR = m_RenderTargets->hackLoadedColorsLDR[0]->dataLayout[0][0];
+        m_CommandList->writeTexture(m_RenderTargets->hackPreUIColor, 0, 0, 
+            static_cast<const void*>(m_RenderTargets->hackLoadedColorsLDR[0]->data->data()),
+            layoutLDR.rowPitch, layoutLDR.depthPitch);
+
+        const TextureSubresourceData& layoutHDR = m_RenderTargets->hackLoadedColorsHDR[0]->dataLayout[0][0];
+        m_CommandList->writeTexture(m_RenderTargets->hackHdrColor, 0, 0,
+            static_cast<const void*>(m_RenderTargets->hackLoadedColorsHDR[0]->data->data()),
+            layoutHDR.rowPitch, layoutHDR.depthPitch);
+    }
+
+    if (m_RenderTargets->hackEnabled) {
+        NVWrapper::Get().TagResources_General(m_CommandList,
+            m_View->GetChildView(ViewType::PLANAR, 0),
+            m_RenderTargets->MotionVectors,
+            m_RenderTargets->Depth,
+            //m_RenderTargets->PreUIColor
+            m_RenderTargets->hackPreUIColor
+        );
+    }
+    else {
+        NVWrapper::Get().TagResources_General(m_CommandList,
+            m_View->GetChildView(ViewType::PLANAR, 0),
+            m_RenderTargets->MotionVectors,
+            m_RenderTargets->Depth,
+            m_RenderTargets->PreUIColor);
+    }
 
 #ifdef STREAMLINE_FEATURE_DLSS_RR
     // Set feature options
@@ -1323,10 +1357,19 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     // ANTI-ALIASING
 
     // TAG STREAMLINE RESOURCES
-    NVWrapper::Get().TagResources_DLSS_NIS(m_CommandList,
-        m_View->GetChildView(ViewType::PLANAR, 0),
-        m_RenderTargets->AAResolvedColor,
-        m_RenderTargets->HdrColor);
+    if (m_RenderTargets->hackEnabled) {
+        NVWrapper::Get().TagResources_DLSS_NIS(m_CommandList,
+            m_View->GetChildView(ViewType::PLANAR, 0),
+            m_RenderTargets->AAResolvedColor,
+            m_RenderTargets->hackHdrColor);
+
+    }
+    else {
+        NVWrapper::Get().TagResources_DLSS_NIS(m_CommandList,
+            m_View->GetChildView(ViewType::PLANAR, 0),
+            m_RenderTargets->AAResolvedColor,
+            m_RenderTargets->HdrColor);
+    }
 
     if (m_ui.AAMode != AntiAliasingMode::NONE) {
 
@@ -1394,7 +1437,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
 
 
-    m_CommonPasses->BlitTexture(m_CommandList, m_RenderTargets->PreUIFramebuffer->GetFramebuffer(*m_View), texToDisplay, &m_BindingCache);
+        m_CommonPasses->BlitTexture(m_CommandList, m_RenderTargets->PreUIFramebuffer->GetFramebuffer(*m_View), texToDisplay, &m_BindingCache);
 
     //
     // DO NIS
@@ -1480,7 +1523,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
     else
     {
-        m_CommandList->copyTexture(framebufferTexture, nvrhi::TextureSlice(), m_RenderTargets->PreUIColor, nvrhi::TextureSlice());
+            m_CommandList->copyTexture(framebufferTexture, nvrhi::TextureSlice(), m_RenderTargets->PreUIColor, nvrhi::TextureSlice());
     }
 
     // DEBUG OVERLAY

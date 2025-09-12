@@ -64,7 +64,7 @@ struct UIData
 {
     // General
     nvrhi::GraphicsAPI                  GraphicsAPI = nvrhi::GraphicsAPI::D3D12;
-    bool                                EnableAnimations = true;
+    bool                                EnableAnimations = false;
     float                               AnimationSpeed = 1.;
     bool                                EnableVsync = false;
     bool                                VisualiseBuffers = false;
@@ -86,7 +86,7 @@ public:
     donut::render::SsaoParameters       SsaoParams;
 
     // Tonemapping
-    bool                                 EnableToneMapping = true;
+    bool                                 EnableToneMapping = false;
     donut::render::ToneMappingParameters ToneMappingParams;
 
     // Sky
@@ -152,7 +152,7 @@ public:
     // DLSS specific parameters
     float                               DLSS_Sharpness = 0.f;
     bool                                DLSS_Supported = false;
-    sl::DLSSMode                        DLSS_Mode = sl::DLSSMode::eOff;
+    sl::DLSSMode                        DLSS_Mode = sl::DLSSMode::eDLAA;
     RenderingResolutionMode             DLSS_Resolution_Mode = RenderingResolutionMode::FIXED;
     bool                                DLSS_Dynamic_Res_change = true;
     AntiAliasingMode                    DLSS_Last_AA = AntiAliasingMode::NONE;

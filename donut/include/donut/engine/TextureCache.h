@@ -87,7 +87,7 @@ namespace donut::engine
         std::queue<std::shared_ptr<TextureData>> m_TexturesToFinalize;
         std::shared_ptr<DescriptorTableManager> m_DescriptorTable;
         std::mutex m_TexturesToFinalizeMutex;
-
+    
         std::shared_ptr<vfs::IFileSystem> m_fs;
 
         uint32_t m_MaxTextureSize = 0;
@@ -109,10 +109,23 @@ namespace donut::engine
             const std::shared_ptr<TextureData>& texture,
             const std::string& extension,
             const std::string& mimeType) const;
+        bool hackFillTextureData(
+            const std::shared_ptr<vfs::IBlob>& fileData,
+            const std::shared_ptr<TextureData>& texture,
+            const std::string& extension,
+            const std::string& mimeType) const;
+        bool hackLoadEXRFromFile(
+            char** outputData,
+            int* width, int* height,
+            std::filesystem::path textureFile = std::filesystem::path("../media/TEST_SCENE/input_TEST/NPP_beauty_2472_0000_0_-0.40563965_-0.35599041.exr")) const;
 
         void FinalizeTexture(
             std::shared_ptr<TextureData> texture,
             CommonRenderPasses* passes,
+            nvrhi::ICommandList* commandList);
+        void hackFinalizeTexture(
+            std::shared_ptr<TextureData> texture, 
+            CommonRenderPasses* passes, 
             nvrhi::ICommandList* commandList);
 
         virtual void TextureLoaded(std::shared_ptr<TextureData> texture);
@@ -131,6 +144,12 @@ namespace donut::engine
         // Synchronous read and decode, synchronous upload and mip generation on a given command list (must be open).
         // The `passes` argument is optional, and mip generation is disabled if it's NULL.
         virtual std::shared_ptr<LoadedTexture> LoadTextureFromFile(
+            const std::filesystem::path& path,
+            bool sRGB,
+            CommonRenderPasses* passes,
+            nvrhi::ICommandList* commandList);
+
+        std::shared_ptr<TextureData> hackLoadTextureFromFile(
             const std::filesystem::path& path,
             bool sRGB,
             CommonRenderPasses* passes,
@@ -173,6 +192,13 @@ namespace donut::engine
             const std::string& mimeType,
             bool sRGB);
         
+        int TraverseFolderPath(
+            const std::filesystem::path& folderPath,
+            std::vector<std::filesystem::path>& outPaths,
+            bool extractJitter,
+            std::vector<std::pair<float, float>>& jitterXY,
+            std::string extension);
+
         // Tells if the texture has been loaded from file successfully and its data is available in the texture object.
         // After the texture is finalized and uploaded to the GPU, the data is no longer available on the CPU,
         // and this function returns false.

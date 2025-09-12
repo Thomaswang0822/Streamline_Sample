@@ -528,7 +528,8 @@ bool GltfImporter::Load(
 
     std::unordered_map<const cgltf_image*, std::shared_ptr<LoadedTexture>> textures;
 
-    auto load_texture = [this, &textures, &textureCache, executor, &fileName, objects, &vfsContext, c_SearchForDds](const cgltf_texture* texture, bool sRGB)
+    auto load_texture = [this, &textures, &textureCache, executor, &fileName, objects, &vfsContext, c_SearchForDds]
+                        (const cgltf_texture* texture, bool sRGB) -> std::shared_ptr<LoadedTexture>
     {
         if (!texture)
             return std::shared_ptr<LoadedTexture>(nullptr);

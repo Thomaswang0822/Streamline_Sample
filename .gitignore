@@ -7,3 +7,5 @@ _build
 
 # streamline sdk should not be tracked or modified
 streamline
+
+media/TEST_SCENE

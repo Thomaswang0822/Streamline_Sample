@@ -39,6 +39,9 @@
 #include <donut/render/GBuffer.h>
 #include <nvrhi/nvrhi.h>
 #include <nvrhi/common/misc.h>
+#include <donut/engine/TextureCache.h>
+#include <donut/engine/SceneTypes.h>
+#include <donut/core/log.h>
 
 
 /// <summary>
@@ -61,6 +64,25 @@ public:
     nvrhi::TextureHandle GBufferSpecularRR;
     nvrhi::TextureHandle GBufferNormalsRR;
     nvrhi::TextureHandle GBufferEmissiveRR;
+
+#pragma region HACK
+    // general
+    bool hackEnabled = true;
+    size_t hackNumFrames;
+    std::vector<std::filesystem::path> hackPaths;
+    // data storage: loaded textures
+    std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedColorsLDR;
+    std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedColorsHDR;
+    std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedMVs;
+    std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedDepths;
+    std::vector<std::pair<float, float>> hackLoadedJitterXY;
+    // used for render targets
+    nvrhi::TextureHandle hackPreUIColor;
+    nvrhi::TextureHandle hackHdrColor;
+    //nvrhi::TextureHandle hackMotionVectors;
+    //nvrhi::TextureHandle hackDepth;
+    std::shared_ptr<donut::engine::FramebufferFactory> hackPreUIFramebuffer;
+#pragma endregion
 
     nvrhi::HeapHandle Heap;
 
@@ -176,7 +198,23 @@ public:
         desc.debugName = "PreUIColor";
         PreUIColor = device->createTexture(desc);
 
+#pragma region HACK
+        desc = PreUIColor->getDesc();
+        desc.debugName = "hackPreUIColor";
+        hackPreUIColor = device->createTexture(desc);
 
+        desc = HdrColor->getDesc();
+        desc.debugName = "hackHdrColor";
+        hackHdrColor = device->createTexture(desc);
+
+        //desc = MotionVectors->getDesc();
+        //desc.debugName = "hackGBufferMotionVectors";
+        //hackMotionVectors = device->createTexture(desc);
+        //
+        //desc = Depth->getDesc();
+        //desc.debugName = "hackGBufferDepth"; 
+        //hackDepth = device->createTexture(desc);
+#pragma endregion
 
         if (desc.isVirtual)
         {
@@ -198,6 +236,9 @@ public:
                 AmbientOcclusion,
                 GBufferSpecularRR,
                 GBufferDiffuseRR
+                , // hack render targets
+                hackPreUIColor,
+                hackHdrColor
             };
 
             for (auto texture : textures)
@@ -244,6 +285,9 @@ public:
 
         PreUIFramebuffer = std::make_shared<donut::engine::FramebufferFactory>(device);
         PreUIFramebuffer->RenderTargets = { PreUIColor };
+
+        hackPreUIFramebuffer = std::make_shared<donut::engine::FramebufferFactory>(device);
+        hackPreUIFramebuffer->RenderTargets = { hackPreUIColor };
     }
 
     bool IsUpdateRequired(donut::math::int2 renderSize, donut::math::int2 displaySize, donut::math::uint sampleCount = 1) const
@@ -266,5 +310,76 @@ public:
         commandList->clearTextureFloat(GBufferSpecularRR, nvrhi::AllSubresources, nvrhi::Color(0.f));
         commandList->clearTextureFloat(GBufferNormalsRR, nvrhi::AllSubresources, nvrhi::Color(0.f));
         commandList->clearTextureFloat(GBufferEmissiveRR, nvrhi::AllSubresources, nvrhi::Color(0.f));
+
+        commandList->clearTextureFloat(hackPreUIColor, nvrhi::AllSubresources, nvrhi::Color(0.f));
+        commandList->clearTextureFloat(hackHdrColor, nvrhi::AllSubresources, nvrhi::Color(0.f));
+    }
+
+    bool LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache, nvrhi::CommandListHandle cmdlist) {
+        // ### hard code things for now ###
+        // NOTE: sdk has a virtual fs IFileSystem, which doesn't take path relative to cwd
+        hackPaths.push_back(std::filesystem::path("/media/TEST_SCENE/input_TEST"));  // for LDR
+        hackPaths.push_back(std::filesystem::path("/media/TEST_SCENE/input_TEST"));  // for HDR
+        hackNumFrames = 1;
+        bool parseJitter = false;
+        // ######
+
+        // Load 0: LDR data for PreUIColor
+        {
+            std::vector<std::filesystem::path> pngFiles;
+            size_t nTexturesLDR = textureCache->TraverseFolderPath(
+                hackPaths[0], pngFiles, false /* parseJitter */, hackLoadedJitterXY, ".png");
+
+            if (nTexturesLDR < hackNumFrames) {
+                donut::log::error("Expect to run %d frames more than LDR frame captures: %d",
+                    hackNumFrames, nTexturesLDR);
+            }
+            // we may want to run only 5 frames even there are 60 in the folder
+            for (size_t frameIdx = 0; frameIdx < hackNumFrames; ++frameIdx) {
+                auto& filePath = pngFiles[frameIdx];
+
+                std::shared_ptr<donut::engine::TextureData> loadedTexture =
+                    textureCache->hackLoadTextureFromFile(filePath, true, nullptr, cmdlist);
+
+                //loadedTexture->texture;
+                auto _checkDesc = loadedTexture->texture->getDesc();
+                hackLoadedColorsLDR.push_back(loadedTexture);
+            }
+        }
+
+        // Load 1: HDR data
+        {
+            std::vector<std::filesystem::path> exrFiles;
+            size_t nTexturesHDR = textureCache->TraverseFolderPath(
+                hackPaths[1], exrFiles, false /* parseJitter */, hackLoadedJitterXY, ".exr");
+
+            if (nTexturesHDR < hackNumFrames) {
+                donut::log::error("Expect to run %d frames more than HDR frame captures: %d",
+                    hackNumFrames, nTexturesHDR);
+            }
+            // we may want to run only 5 frames even there are 60 in the folder
+            for (size_t frameIdx = 0; frameIdx < hackNumFrames; ++frameIdx) {
+                auto& filePath = exrFiles[frameIdx];
+
+                std::shared_ptr<donut::engine::TextureData> loadedTexture =
+                    textureCache->hackLoadTextureFromFile(filePath, true, nullptr, cmdlist);
+
+                //loadedTexture->texture;
+                auto _checkDesc = loadedTexture->texture->getDesc();
+                hackLoadedColorsHDR.push_back(loadedTexture);
+            }
+        }
+
+        // Load 2: Motion Vectors data
+        {
+
+        }
+
+        // Load 3: GBuffer Depth data
+        {
+
+        }
+
+        return false;
     }
 };

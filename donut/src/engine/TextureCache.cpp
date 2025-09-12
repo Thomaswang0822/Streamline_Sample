@@ -341,6 +341,274 @@ bool TextureCache::FillTextureData(
     return true;
 }
 
+bool TextureCache::hackFillTextureData(
+    const std::shared_ptr<vfs::IBlob>& fileData,
+    const std::shared_ptr<TextureData>& texture,
+    const std::string& extension,
+    const std::string& mimeType) const
+{
+    if (extension == ".dds" || extension == ".DDS" || mimeType == "image/vnd-ms.dds")
+    {
+        texture->data = fileData;
+        if (!LoadDDSTextureFromMemory(*texture))
+        {
+            texture->data = nullptr;
+            log::message(m_ErrorLogSeverity, "Couldn't load DDS texture '%s'", texture->path.c_str());
+            return false;
+        }
+    }
+#ifdef DONUT_WITH_TINYEXR
+    // ###### the ONLY diff is here: want to read RGBA16_FLOAT instead of RGBA32_FLOAT
+    else if (extension == ".exr" || extension == ".EXR" || mimeType == "image/aces")
+    {
+        char* data = nullptr;
+        int width = 0, height = 0;
+        char const* err = nullptr;
+
+        if (hackLoadEXRFromFile(&data, &width, &height) )
+        {
+            uint32_t channels = 4;
+            uint32_t bytesPerPixel = channels * 2;
+
+            texture->data = std::make_shared<Blob>(data, bytesPerPixel * width * height);
+            texture->width = static_cast<uint32_t>(width);
+            texture->height = static_cast<uint32_t>(height);
+            texture->format = nvrhi::Format::RGBA16_FLOAT;
+
+            texture->originalBitsPerPixel = bytesPerPixel * 8;
+            texture->isRenderTarget = true;
+            texture->mipLevels = 1;
+            texture->dimension = nvrhi::TextureDimension::Texture2D;
+
+            texture->dataLayout.resize(1);
+            texture->dataLayout[0].resize(1);
+            texture->dataLayout[0][0].dataOffset = 0;
+            texture->dataLayout[0][0].rowPitch = static_cast<size_t>(width * bytesPerPixel);
+            texture->dataLayout[0][0].dataSize = static_cast<size_t>(width * height * bytesPerPixel);
+
+            return true;
+        }
+        else
+        {
+            log::warning("Couldn't load EXR texture '%s'", texture->path.c_str());
+            return false;
+        }
+    }
+    // ###### END of the ONLY diff
+#endif // DONUT_WITH_TINYEXR
+    else
+    {
+        int width = 0, height = 0, originalChannels = 0, channels = 0;
+
+        if (!stbi_info_from_memory(
+            static_cast<const stbi_uc*>(fileData->data()),
+            static_cast<int>(fileData->size()),
+            &width, &height, &originalChannels))
+        {
+            log::message(m_ErrorLogSeverity, "Couldn't process image header for texture '%s'", texture->path.c_str());
+            return false;
+        }
+
+        bool is_hdr = stbi_is_hdr_from_memory(
+            static_cast<const stbi_uc*>(fileData->data()),
+            static_cast<int>(fileData->size()));
+
+        if (originalChannels == 3)
+        {
+            channels = 4;
+        }
+        else {
+            channels = originalChannels;
+        }
+
+        unsigned char* bitmap;
+        int bytesPerPixel = channels * (is_hdr ? 4 : 1);
+
+        if (is_hdr)
+        {
+            float* floatmap = stbi_loadf_from_memory(
+                static_cast<const stbi_uc*>(fileData->data()),
+                static_cast<int>(fileData->size()),
+                &width, &height, &originalChannels, channels);
+
+            bitmap = reinterpret_cast<unsigned char*>(floatmap);
+        }
+        else
+        {
+            bitmap = stbi_load_from_memory(
+                static_cast<const stbi_uc*>(fileData->data()),
+                static_cast<int>(fileData->size()),
+                &width, &height, &originalChannels, channels);
+        }
+
+        if (!bitmap)
+        {
+            log::message(m_ErrorLogSeverity, "Couldn't load generic texture '%s'", texture->path.c_str());
+            return false;
+        }
+
+        texture->originalBitsPerPixel = static_cast<uint32_t>(originalChannels) * (is_hdr ? 32 : 8);
+        texture->width = static_cast<uint32_t>(width);
+        texture->height = static_cast<uint32_t>(height);
+        texture->isRenderTarget = true;
+        texture->mipLevels = 1;
+        texture->dimension = nvrhi::TextureDimension::Texture2D;
+
+        texture->dataLayout.resize(1);
+        texture->dataLayout[0].resize(1);
+        texture->dataLayout[0][0].dataOffset = 0;
+        texture->dataLayout[0][0].rowPitch = static_cast<size_t>(width * bytesPerPixel);
+        texture->dataLayout[0][0].dataSize = static_cast<size_t>(width * height * bytesPerPixel);
+
+        texture->data = std::make_shared<StbImageBlob>(bitmap);
+        bitmap = nullptr; // ownership transferred to the blob
+
+        switch (channels)
+        {
+        case 1:
+            texture->format = is_hdr ? nvrhi::Format::R32_FLOAT : nvrhi::Format::R8_UNORM;
+            break;
+        case 2:
+            texture->format = is_hdr ? nvrhi::Format::RG32_FLOAT : nvrhi::Format::RG8_UNORM;
+            break;
+        case 4:
+            texture->format = is_hdr ? nvrhi::Format::RGBA32_FLOAT :
+                (texture->forceSRGB ? nvrhi::Format::SRGBA8_UNORM : nvrhi::Format::RGBA8_UNORM);
+            break;
+        default:
+            texture->data.reset(); // release the bitmap data
+
+            log::message(m_ErrorLogSeverity, "Unsupported number of components (%d) for texture '%s'", channels, texture->path.c_str());
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool TextureCache::hackLoadEXRFromFile(
+    char** outputData,
+    int* width, int* height,
+    std::filesystem::path textureFile) const
+{
+    std::string fileName = textureFile.string();
+
+    // Modern TinyEXR API
+    const char* err = nullptr;
+    EXRHeader   header;
+    EXRImage    image;
+    InitEXRHeader(&header);
+    InitEXRImage(&image);
+
+    // 1. Parse version
+    EXRVersion version;
+    int        ret = ParseEXRVersionFromFile(&version, fileName.c_str());
+    if (ret != TINYEXR_SUCCESS)
+    {
+        log::error("Invalid EXR version: %s", fileName.c_str());
+        return false;
+    }
+
+    // 2. Parse header
+    ret = ParseEXRHeaderFromFile(&header, &version, fileName.c_str(), &err);
+    if (ret != TINYEXR_SUCCESS)
+    {
+        if (err)
+        {
+            log::error("EXR header error: %s", err);
+        }
+        return false;
+    }
+
+    // 3. Ensure tinyexr read as FP16 according to the spec
+    for (int i = 0; i < header.num_channels; i++)
+    {
+        assert(header.requested_pixel_types[i] == TINYEXR_PIXELTYPE_HALF, 
+            "Input spec says each RGB channel is 16 bits.");
+    }
+
+    // 4. Load image data
+    ret = LoadEXRImageFromFile(&image, &header, fileName.c_str(), &err);
+    if (ret != TINYEXR_SUCCESS)
+    {
+        if (err)
+        {
+            log::error("EXR load error: %s", err);
+        }
+        return false;
+    }
+
+    // 5. Find RGB channels (assume first 3 channels are RGB)
+    int idxR = -1, idxG = -1, idxB = -1, idxA = -1;
+    for (int c = 0; c < header.num_channels; c++)
+    {
+        if (strcmp(header.channels[c].name, "R") == 0)
+            idxR = c;
+        else if (strcmp(header.channels[c].name, "G") == 0)
+            idxG = c;
+        else if (strcmp(header.channels[c].name, "B") == 0)
+            idxB = c;
+        else if (strcmp(header.channels[c].name, "A") == 0)
+            idxA = c;
+    }
+
+    // Default to first 3 channels if not found
+    assert(idxR != -1 && idxG != -1 && idxB != -1,
+        "EXR file %ls has missing (idx = -1) RGB channels: idxR = %d, idxG = %d, idxB = %d",
+        fileName.c_str(), idxR, idxG, idxB);
+
+    // 6. Convert to target format
+    const size_t pixelCount = static_cast<size_t>(image.width) * static_cast<size_t>(image.height);
+
+    // Get channel pointers; tinyexr use uint16_t = unsigned short for FP16
+    uint16_t* r = idxR != -1 ? reinterpret_cast<uint16_t*>(image.images[idxR]) : nullptr;
+    uint16_t* g = idxG != -1 ? reinterpret_cast<uint16_t*>(image.images[idxG]) : nullptr;
+    uint16_t* b = idxB != -1 ? reinterpret_cast<uint16_t*>(image.images[idxB]) : nullptr;
+    uint16_t* a = idxA >= 0 ? reinterpret_cast<uint16_t*>(image.images[idxA]) : nullptr;
+    assert(r != nullptr && g != nullptr && b != nullptr,
+        "EXR file %ls has null channel pointers when converting to uint16_t: r = %p, g = %p, b = %p",
+        fileName.c_str(), r, g, b);
+
+    // prepare FP16 1.0f constant
+    tinyexr::FP32 fp32_ONE; fp32_ONE.f = 1.0f;
+    const uint16_t      fp16_ONE = tinyexr::float_to_half_full(fp32_ONE).u;
+
+    // first malloc byte array: RGBA16_Float is 4 channels x 2 bytes
+    const size_t bytesPerPixel = 8;
+    char* finalCharData = static_cast<char*>(malloc(pixelCount * bytesPerPixel));
+    if (!finalCharData)
+    {
+        log::error("Failed to allocate memory for EXR texture data.");
+        return false;
+    }
+
+    // store texture； Can directly use FP16
+    uint16_t* fp16Data = reinterpret_cast<uint16_t*>(finalCharData);
+    assert(finalCharData != nullptr && fp16Data != nullptr,
+        L"Failed to reinterpret_cast for RGBA16_FLOAT EXR texture.");
+
+    size_t idxSrc, idxDst;
+    for (size_t i = 0; i < image.height; ++i)
+    {
+        for (size_t j = 0; j < image.width; ++j)
+        {
+            idxSrc = i * image.width + j;
+            idxDst = i * image.width + j;
+
+            fp16Data[4 * idxDst + 0] = r[idxSrc];
+            fp16Data[4 * idxDst + 1] = g[idxSrc];
+            fp16Data[4 * idxDst + 2] = b[idxSrc];
+            fp16Data[4 * idxDst + 3] = a ? a[idxSrc] : fp16_ONE;
+        }
+    }
+
+    // write output in the end
+    *outputData = finalCharData;
+    *width = image.width;
+    *height = image.height;
+    return true;
+}
+
 uint GetMipLevelsNum(uint width, uint height)
 {
     uint size = std::min(width, height);
@@ -486,6 +754,150 @@ void TextureCache::FinalizeTexture(
     ++m_TexturesFinalized;
 }
 
+void donut::engine::TextureCache::hackFinalizeTexture(
+    std::shared_ptr<TextureData> texture,
+    CommonRenderPasses* passes,
+    nvrhi::ICommandList* commandList)
+
+{
+    assert(texture->data);
+    assert(commandList);
+
+    uint originalWidth = texture->width;
+    uint originalHeight = texture->height;
+
+    bool isBlockCompressed =
+        (texture->format == nvrhi::Format::BC1_UNORM) ||
+        (texture->format == nvrhi::Format::BC1_UNORM_SRGB) ||
+        (texture->format == nvrhi::Format::BC2_UNORM) ||
+        (texture->format == nvrhi::Format::BC2_UNORM_SRGB) ||
+        (texture->format == nvrhi::Format::BC3_UNORM) ||
+        (texture->format == nvrhi::Format::BC3_UNORM_SRGB) ||
+        (texture->format == nvrhi::Format::BC4_SNORM) ||
+        (texture->format == nvrhi::Format::BC4_UNORM) ||
+        (texture->format == nvrhi::Format::BC5_SNORM) ||
+        (texture->format == nvrhi::Format::BC5_UNORM) ||
+        (texture->format == nvrhi::Format::BC6H_SFLOAT) ||
+        (texture->format == nvrhi::Format::BC6H_UFLOAT) ||
+        (texture->format == nvrhi::Format::BC7_UNORM) ||
+        (texture->format == nvrhi::Format::BC7_UNORM_SRGB);
+
+    if (isBlockCompressed)
+    {
+        originalWidth = (originalWidth + 3) & ~3;
+        originalHeight = (originalHeight + 3) & ~3;
+    }
+
+    uint scaledWidth = originalWidth;
+    uint scaledHeight = originalHeight;
+
+    if (m_MaxTextureSize > 0 && int(std::max(originalWidth, originalHeight)) > m_MaxTextureSize &&
+        texture->isRenderTarget && texture->dimension == nvrhi::TextureDimension::Texture2D)
+    {
+        if (originalWidth >= originalHeight)
+        {
+            scaledHeight = originalHeight * m_MaxTextureSize / originalWidth;
+            scaledWidth = m_MaxTextureSize;
+        }
+        else
+        {
+            scaledWidth = originalWidth * m_MaxTextureSize / originalHeight;
+            scaledHeight = m_MaxTextureSize;
+        }
+    }
+
+    const char* dataPointer = static_cast<const char*>(texture->data->data());
+
+    nvrhi::TextureDesc textureDesc;
+    textureDesc.format = texture->format;
+    textureDesc.width = scaledWidth;
+    textureDesc.height = scaledHeight;
+    textureDesc.depth = texture->depth;
+    textureDesc.arraySize = texture->arraySize;
+    textureDesc.dimension = texture->dimension;
+    textureDesc.mipLevels = m_GenerateMipmaps && texture->isRenderTarget && passes
+        ? GetMipLevelsNum(textureDesc.width, textureDesc.height)
+        : texture->mipLevels;
+    textureDesc.debugName = texture->path;
+    textureDesc.isRenderTarget = texture->isRenderTarget;
+    // ####### the ONLY diff
+    textureDesc.initialState = nvrhi::ResourceStates::RenderTarget;
+    textureDesc.isUAV = true;
+    textureDesc.useClearValue = true;
+    textureDesc.keepInitialState = true;
+    // #######
+    texture->texture = m_Device->createTexture(textureDesc);
+
+    commandList->beginTrackingTextureState(texture->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::Common);
+
+    if (m_DescriptorTable)
+        texture->bindlessDescriptor = m_DescriptorTable->CreateDescriptorHandle(nvrhi::BindingSetItem::Texture_SRV(0, texture->texture));
+
+    if (scaledWidth != originalWidth || scaledHeight != originalHeight)
+    {
+        nvrhi::TextureDesc tempTextureDesc;
+        tempTextureDesc.format = texture->format;
+        tempTextureDesc.width = originalWidth;
+        tempTextureDesc.height = originalHeight;
+        tempTextureDesc.depth = textureDesc.depth;
+        tempTextureDesc.arraySize = textureDesc.arraySize;
+        tempTextureDesc.mipLevels = 1;
+        tempTextureDesc.dimension = textureDesc.dimension;
+
+        nvrhi::TextureHandle tempTexture = m_Device->createTexture(tempTextureDesc);
+        assert(tempTexture);
+        commandList->beginTrackingTextureState(tempTexture, nvrhi::AllSubresources, nvrhi::ResourceStates::Common);
+
+        for (uint32_t arraySlice = 0; arraySlice < texture->arraySize; arraySlice++)
+        {
+            const TextureSubresourceData& layout = texture->dataLayout[arraySlice][0];
+
+            commandList->writeTexture(tempTexture, arraySlice, 0, dataPointer + layout.dataOffset,
+                layout.rowPitch, layout.depthPitch);
+        }
+
+        nvrhi::FramebufferHandle framebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc()
+            .addColorAttachment(texture->texture));
+
+        passes->BlitTexture(commandList, framebuffer, tempTexture);
+    }
+    else
+    {
+        for (uint32_t arraySlice = 0; arraySlice < texture->arraySize; arraySlice++)
+        {
+            for (uint32_t mipLevel = 0; mipLevel < texture->mipLevels; mipLevel++)
+            {
+                const TextureSubresourceData& layout = texture->dataLayout[arraySlice][mipLevel];
+
+                commandList->writeTexture(texture->texture, arraySlice, mipLevel, dataPointer + layout.dataOffset,
+                    layout.rowPitch, layout.depthPitch);
+            }
+        }
+    }
+
+    //texture->data.reset();
+
+    for (uint mipLevel = texture->mipLevels; mipLevel < textureDesc.mipLevels; mipLevel++)
+    {
+        nvrhi::FramebufferHandle framebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc()
+            .addColorAttachment(nvrhi::FramebufferAttachment()
+                .setTexture(texture->texture)
+                .setArraySlice(0)
+                .setMipLevel(mipLevel)));
+
+        BlitParameters blitParams;
+        blitParams.sourceTexture = texture->texture;
+        blitParams.sourceMip = mipLevel - 1;
+        blitParams.targetFramebuffer = framebuffer;
+        passes->BlitTexture(commandList, blitParams);
+    }
+
+    commandList->setPermanentTextureState(texture->texture, nvrhi::ResourceStates::ShaderResource);
+    commandList->commitBarriers();
+
+    ++m_TexturesFinalized;
+}
+
 void TextureCache::TextureLoaded(std::shared_ptr<TextureData> texture)
 {
     std::lock_guard<std::mutex> guard(m_TexturesToFinalizeMutex);
@@ -520,6 +932,36 @@ std::shared_ptr<LoadedTexture> TextureCache::LoadTextureFromFile(
             TextureLoaded(texture);
 
             FinalizeTexture(texture, passes, commandList);
+        }
+    }
+
+    ++m_TexturesLoaded;
+
+    return texture;
+}
+
+std::shared_ptr<TextureData> donut::engine::TextureCache::hackLoadTextureFromFile(
+    const std::filesystem::path& path,
+    bool sRGB,
+    CommonRenderPasses* passes,
+    nvrhi::ICommandList* commandList)
+{
+    std::shared_ptr<TextureData> texture;
+
+    if (FindTextureInCache(path, texture))
+        return texture;
+
+    texture->forceSRGB = sRGB;
+    texture->path = path.generic_string();
+
+    auto fileData = ReadTextureFile(path);
+    if (fileData)
+    {
+        if (hackFillTextureData(fileData, texture, path.extension().generic_string(), ""))
+        {
+            TextureLoaded(texture);
+            // the only diff
+            hackFinalizeTexture(texture, passes, commandList);
         }
     }
 
@@ -674,6 +1116,55 @@ std::shared_ptr<LoadedTexture> TextureCache::LoadTextureFromMemoryDeferred(
     ++m_TexturesLoaded;
 
     return texture;
+}
+
+int TextureCache::TraverseFolderPath(
+    const std::filesystem::path& folderPath, 
+    std::vector<std::filesystem::path>& outPaths, 
+    bool extractJitter,
+    std::vector<std::pair<float, float>>& jitterXY,
+    std::string extension)
+{
+    int count = m_fs->enumerateFiles(folderPath, { extension }, 
+        [&folderPath, &outPaths](std::string_view name)
+        {
+            outPaths.push_back((folderPath / name));
+        });
+
+    // Sort files to ensure proper frame order (assuming filenames contain frame numbers)
+    std::sort(outPaths.begin(), outPaths.end());
+
+    // Then iterate the sorted list to keey the jitter order consistent
+    if (extractJitter)
+    {
+        // this func is also called when reading MV and Depths, so we clear conditionally.
+        jitterXY.clear();
+        for (const auto& entry : outPaths)
+        {
+            /// Example: NPP_beauty_2472_0000_0_-0.40563965_-0.35599041
+            /// NOTE: both XY are .8f with range in [-0.5, 0.5]
+            try
+            {
+                std::string pathStr = entry.stem().generic_string();
+
+                size_t lastDelim = pathStr.find_last_of('_');
+                size_t secondLastDelim = pathStr.find_last_of('_', lastDelim - 1);
+                if (lastDelim == std::string::npos || secondLastDelim == std::string::npos)
+                    donut::log::error("EXR jitter filename %ls does not have expected number of underscores.", pathStr);
+
+                // 2nd-last X, last Y
+                jitterXY.push_back(
+                    { std::stof(pathStr.substr(secondLastDelim + 1, lastDelim - secondLastDelim - 1)), std::stof(pathStr.substr(lastDelim + 1)) });
+            }
+            catch (const std::exception& e)
+            {
+                donut::log::error("%s", e.what());
+            }
+        }
+    }
+
+
+    return outPaths.size();
 }
 
 
