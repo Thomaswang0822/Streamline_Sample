@@ -1307,10 +1307,11 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
 
     // TAG STREAMLINE RESOURCES
-    auto _check0 = m_RenderTargets->hackPreUIColor->getDesc();
-    auto _check1 = m_RenderTargets->hackLoadedColorsLDR[0]->texture->getDesc();
-    auto _check3 = m_RenderTargets->hackHdrColor->getDesc();
-    auto _check4 = m_RenderTargets->hackLoadedColorsHDR[0]->texture->getDesc();
+    auto _checkLDR = m_RenderTargets->hackPreUIColor->getDesc();
+    auto _checkHDR = m_RenderTargets->hackHdrColor->getDesc();
+	auto _checkMV = m_RenderTargets->MotionVectors->getDesc();
+	auto descHackMV = m_RenderTargets->hackMotionVectors->getDesc();
+	auto descDepth = m_RenderTargets->Depth->getDesc();
     if (m_RenderTargets->hackEnabled) {
         const TextureSubresourceData& layoutLDR = m_RenderTargets->hackLoadedColorsLDR[0]->dataLayout[0][0];
         m_CommandList->writeTexture(m_RenderTargets->hackPreUIColor, 0, 0, 
@@ -1321,14 +1322,29 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         m_CommandList->writeTexture(m_RenderTargets->hackHdrColor, 0, 0,
             static_cast<const void*>(m_RenderTargets->hackLoadedColorsHDR[0]->data->data()),
             layoutHDR.rowPitch, layoutHDR.depthPitch);
+
+        const TextureSubresourceData& layoutMV = m_RenderTargets->hackLoadedMVs[0]->dataLayout[0][0];
+        m_CommandList->writeTexture(m_RenderTargets->hackMotionVectors, 0, 0,
+            static_cast<const void*>(m_RenderTargets->hackLoadedMVs[0]->data->data()),
+            layoutMV.rowPitch, layoutMV.depthPitch);
+
+        const TextureSubresourceData& layoutDepth = m_RenderTargets->hackLoadedDepths[0]->dataLayout[0][0];
+        m_CommandList->writeTexture(m_RenderTargets->hackDepth, 0, 0,
+            static_cast<const void*>(m_RenderTargets->hackLoadedDepths[0]->data->data()),
+            layoutDepth.rowPitch, layoutDepth.depthPitch);
+
+		// MV and depth need to restore resources state after copy; probably because they are not virtual textures
+        m_CommandList->setTextureState(m_RenderTargets->hackMotionVectors, nvrhi::AllSubresources, descHackMV.initialState);
+        m_CommandList->setTextureState(m_RenderTargets->hackDepth, nvrhi::AllSubresources, descDepth.initialState);
+        m_CommandList->commitBarriers();
+
     }
 
     if (m_RenderTargets->hackEnabled) {
         NVWrapper::Get().TagResources_General(m_CommandList,
             m_View->GetChildView(ViewType::PLANAR, 0),
-            m_RenderTargets->MotionVectors,
-            m_RenderTargets->Depth,
-            //m_RenderTargets->PreUIColor
+            m_RenderTargets->hackMotionVectors,
+            m_RenderTargets->hackDepth,
             m_RenderTargets->hackPreUIColor
         );
     }
@@ -1554,8 +1570,14 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         };
 
         int counter = 0;
-        displayDebugPiP(m_RenderTargets->MotionVectors, int2(counter % SubWindowNumber, counter++ / SubWindowNumber), 1 / float(SubWindowNumber));
-        displayDebugPiP(m_RenderTargets->Depth, int2(counter % SubWindowNumber, counter++ / SubWindowNumber), 1 / float(SubWindowNumber));
+        if (m_RenderTargets->hackEnabled) {
+            displayDebugPiP(m_RenderTargets->hackMotionVectors, int2(counter% SubWindowNumber, counter++ / SubWindowNumber), 1 / float(SubWindowNumber));
+            displayDebugPiP(m_RenderTargets->hackDepth, int2(counter% SubWindowNumber, counter++ / SubWindowNumber), 1 / float(SubWindowNumber));
+        }
+        else {
+            displayDebugPiP(m_RenderTargets->MotionVectors, int2(counter% SubWindowNumber, counter++ / SubWindowNumber), 1 / float(SubWindowNumber));
+            displayDebugPiP(m_RenderTargets->Depth, int2(counter% SubWindowNumber, counter++ / SubWindowNumber), 1 / float(SubWindowNumber));
+        }
     }
 
     // CLOSE COMMANDLIST

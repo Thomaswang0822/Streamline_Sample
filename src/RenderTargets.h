@@ -79,9 +79,7 @@ public:
     // used for render targets
     nvrhi::TextureHandle hackPreUIColor;
     nvrhi::TextureHandle hackHdrColor;
-    //nvrhi::TextureHandle hackMotionVectors;
-    //nvrhi::TextureHandle hackDepth;
-    std::shared_ptr<donut::engine::FramebufferFactory> hackPreUIFramebuffer;
+    
 #pragma endregion
 
     nvrhi::HeapHandle Heap;
@@ -206,14 +204,6 @@ public:
         desc = HdrColor->getDesc();
         desc.debugName = "hackHdrColor";
         hackHdrColor = device->createTexture(desc);
-
-        //desc = MotionVectors->getDesc();
-        //desc.debugName = "hackGBufferMotionVectors";
-        //hackMotionVectors = device->createTexture(desc);
-        //
-        //desc = Depth->getDesc();
-        //desc.debugName = "hackGBufferDepth"; 
-        //hackDepth = device->createTexture(desc);
 #pragma endregion
 
         if (desc.isVirtual)
@@ -238,7 +228,9 @@ public:
                 GBufferDiffuseRR
                 , // hack render targets
                 hackPreUIColor,
-                hackHdrColor
+                hackHdrColor,
+                //hackMotionVectors,
+                //hackDepth
             };
 
             for (auto texture : textures)
@@ -285,9 +277,6 @@ public:
 
         PreUIFramebuffer = std::make_shared<donut::engine::FramebufferFactory>(device);
         PreUIFramebuffer->RenderTargets = { PreUIColor };
-
-        hackPreUIFramebuffer = std::make_shared<donut::engine::FramebufferFactory>(device);
-        hackPreUIFramebuffer->RenderTargets = { hackPreUIColor };
     }
 
     bool IsUpdateRequired(donut::math::int2 renderSize, donut::math::int2 displaySize, donut::math::uint sampleCount = 1) const
@@ -318,67 +307,65 @@ public:
     bool LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache, nvrhi::CommandListHandle cmdlist) {
         // ### hard code things for now ###
         // NOTE: sdk has a virtual fs IFileSystem, which doesn't take path relative to cwd
-        hackPaths.push_back(std::filesystem::path("/media/TEST_SCENE/input_TEST"));  // for LDR
-        hackPaths.push_back(std::filesystem::path("/media/TEST_SCENE/input_TEST"));  // for HDR
+        hackPaths = {
+            std::filesystem::path("/media/TEST_SCENE/input_TEST"),
+            std::filesystem::path("/media/TEST_SCENE/NPP_JI"),
+            std::filesystem::path("/media/TEST_SCENE/MVD_JI"),
+            std::filesystem::path("/media/TEST_SCENE/MVD_JI"),
+        };
         hackNumFrames = 1;
-        bool parseJitter = false;
         // ######
 
-        // Load 0: LDR data for PreUIColor
-        {
-            std::vector<std::filesystem::path> pngFiles;
-            size_t nTexturesLDR = textureCache->TraverseFolderPath(
-                hackPaths[0], pngFiles, false /* parseJitter */, hackLoadedJitterXY, ".png");
+		typedef donut::engine::TextureCache::HackDataType hackDataType;
 
-            if (nTexturesLDR < hackNumFrames) {
-                donut::log::error("Expect to run %d frames more than LDR frame captures: %d",
-                    hackNumFrames, nTexturesLDR);
-            }
-            // we may want to run only 5 frames even there are 60 in the folder
-            for (size_t frameIdx = 0; frameIdx < hackNumFrames; ++frameIdx) {
-                auto& filePath = pngFiles[frameIdx];
+        auto loadFrameCaptures = [&]
+            (const std::filesystem::path& hackPath, hackDataType dtype)
+            -> std::vector<std::filesystem::path> 
+            {
+                std::vector<std::filesystem::path> filePaths;
+				std::string extension = dtype == hackDataType::COLOR_LDR ? ".png" : ".exr";
+                size_t nFiles = textureCache->TraverseFolderPath(
+                    hackPath, filePaths, dtype == hackDataType::COLOR_HDR, hackLoadedJitterXY, extension);
 
-                std::shared_ptr<donut::engine::TextureData> loadedTexture =
-                    textureCache->hackLoadTextureFromFile(filePath, true, nullptr, cmdlist);
+                if (nFiles < hackNumFrames) {
+                    donut::log::error("Expect to run %d frames more than %s frame captures: %d",
+                        hackNumFrames, extension, nFiles);
+                }
 
-                //loadedTexture->texture;
-                auto _checkDesc = loadedTexture->texture->getDesc();
-                hackLoadedColorsLDR.push_back(loadedTexture);
-            }
-        }
+                // we may want to run only 5 frames even there are 60 in the folder
+                for (size_t frameIdx = 0; frameIdx < hackNumFrames; ++frameIdx) {
+                    auto& filePath = filePaths[frameIdx];
 
-        // Load 1: HDR data
-        {
-            std::vector<std::filesystem::path> exrFiles;
-            size_t nTexturesHDR = textureCache->TraverseFolderPath(
-                hackPaths[1], exrFiles, false /* parseJitter */, hackLoadedJitterXY, ".exr");
+                    std::shared_ptr<donut::engine::TextureData> loadedTexture = 
+                        textureCache->hackLoadTextureFromFile(filePath, dtype);
+                        
+                    switch (dtype)
+                    {
+                    case hackDataType::COLOR_LDR:
+                        hackLoadedColorsLDR.push_back(loadedTexture);
+                        break;
+                    case hackDataType::COLOR_HDR:
+                        hackLoadedColorsHDR.push_back(loadedTexture);
+                        break;
+                    case hackDataType::MOTION_VECTORS:
+                        hackLoadedMVs.push_back(loadedTexture);
+                        break;
+                    case hackDataType::GBUFFER_DEPTH:
+                        hackLoadedDepths.push_back(loadedTexture);
+                        break;
+                    default:
+                        donut::log::error("Unsupported extension %s in LoadHackTextures", extension);
+                        break;
+                    }
+                }
 
-            if (nTexturesHDR < hackNumFrames) {
-                donut::log::error("Expect to run %d frames more than HDR frame captures: %d",
-                    hackNumFrames, nTexturesHDR);
-            }
-            // we may want to run only 5 frames even there are 60 in the folder
-            for (size_t frameIdx = 0; frameIdx < hackNumFrames; ++frameIdx) {
-                auto& filePath = exrFiles[frameIdx];
+                return filePaths;
+            };
 
-                std::shared_ptr<donut::engine::TextureData> loadedTexture =
-                    textureCache->hackLoadTextureFromFile(filePath, true, nullptr, cmdlist);
-
-                //loadedTexture->texture;
-                auto _checkDesc = loadedTexture->texture->getDesc();
-                hackLoadedColorsHDR.push_back(loadedTexture);
-            }
-        }
-
-        // Load 2: Motion Vectors data
-        {
-
-        }
-
-        // Load 3: GBuffer Depth data
-        {
-
-        }
+        auto pngFiles = loadFrameCaptures(hackPaths[0], hackDataType::COLOR_LDR);
+        auto exrFiles = loadFrameCaptures(hackPaths[1], hackDataType::COLOR_HDR);
+		auto mvFiles = loadFrameCaptures(hackPaths[2], hackDataType::MOTION_VECTORS);
+		auto depthFiles = loadFrameCaptures(hackPaths[3], hackDataType::GBUFFER_DEPTH);
 
         return false;
     }

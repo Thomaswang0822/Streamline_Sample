@@ -50,6 +50,9 @@ namespace donut::render
 
         nvrhi::TextureHandle MotionVectors;
 
+        nvrhi::TextureHandle hackMotionVectors;
+        nvrhi::TextureHandle hackDepth;
+
         std::shared_ptr<engine::FramebufferFactory> GBufferFramebuffer;
 
         virtual ~GBufferRenderTargets() = default;

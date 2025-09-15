@@ -78,6 +78,13 @@ namespace donut::engine
 
     class TextureCache
     {
+    public:
+        enum class HackDataType {
+            COLOR_LDR = 0,
+            COLOR_HDR = 1,
+            MOTION_VECTORS = 2,
+            GBUFFER_DEPTH = 3,
+        };
     protected:
         nvrhi::DeviceHandle m_Device;
         nvrhi::CommandListHandle m_CommandList;
@@ -109,23 +116,27 @@ namespace donut::engine
             const std::shared_ptr<TextureData>& texture,
             const std::string& extension,
             const std::string& mimeType) const;
-        bool hackFillTextureData(
-            const std::shared_ptr<vfs::IBlob>& fileData,
-            const std::shared_ptr<TextureData>& texture,
-            const std::string& extension,
-            const std::string& mimeType) const;
+
+        // helpers
+        /**
+         * Load RGBA16_FLOAT frame captures.
+         */
         bool hackLoadEXRFromFile(
             char** outputData,
             int* width, int* height,
-            std::filesystem::path textureFile = std::filesystem::path("../media/TEST_SCENE/input_TEST/NPP_beauty_2472_0000_0_-0.40563965_-0.35599041.exr")) const;
+            std::filesystem::path textureFile) const;        
+        /**
+         * Load RG16_FLOAT motion vectors or D24S8 depth.
+         */
+        bool hackLoadJitterFromFile(
+            char** outputData,
+            int* width, int* height,
+            std::filesystem::path textureFile,
+            bool isMV) const;
 
         void FinalizeTexture(
             std::shared_ptr<TextureData> texture,
             CommonRenderPasses* passes,
-            nvrhi::ICommandList* commandList);
-        void hackFinalizeTexture(
-            std::shared_ptr<TextureData> texture, 
-            CommonRenderPasses* passes, 
             nvrhi::ICommandList* commandList);
 
         virtual void TextureLoaded(std::shared_ptr<TextureData> texture);
@@ -149,11 +160,19 @@ namespace donut::engine
             CommonRenderPasses* passes,
             nvrhi::ICommandList* commandList);
 
+        /**
+         * hack version of LoadTextureFromFile, but works very differently:
+         * Unlike LoadTextureFromFile, which calls FinalizeTexture to recreate data at texture->texture
+         * and clear TextureData* texture->data,
+         * this function does not create texture->texture or clear texture->data.
+         *
+         * `texture` is struct TextureData : public LoadedTexture
+         * `texture->data` is IBlob*, i.e. raw bytes
+         * `texture->texture` is TextureHandle, a member of LoadedTexture         *
+         */
         std::shared_ptr<TextureData> hackLoadTextureFromFile(
             const std::filesystem::path& path,
-            bool sRGB,
-            CommonRenderPasses* passes,
-            nvrhi::ICommandList* commandList);
+            HackDataType dtype);
 
         // Synchronous read and decode, deferred upload and mip generation (in the ProcessRenderingThreadCommands queue).
         virtual std::shared_ptr<LoadedTexture> LoadTextureFromFileDeferred(

@@ -67,7 +67,7 @@ struct UIData
     bool                                EnableAnimations = false;
     float                               AnimationSpeed = 1.;
     bool                                EnableVsync = false;
-    bool                                VisualiseBuffers = false;
+    bool                                VisualiseBuffers = true;
     float                               CpuLoad = 0;
     int                                 GpuLoad = 0;
     donut::math::int2                   Resolution = { 0,0 };
