@@ -119,12 +119,13 @@ namespace donut::engine
 
         // helpers
         /**
-         * Load RGBA16_FLOAT frame captures.
+         * Load RGBA16_FLOAT or BGRA8_UNORM frame captures.
          */
         bool hackLoadEXRFromFile(
             char** outputData,
             int* width, int* height,
-            std::filesystem::path textureFile) const;        
+            std::filesystem::path textureFile,
+            bool toLDR) const;
         /**
          * Load RG16_FLOAT motion vectors or D24S8 depth.
          */

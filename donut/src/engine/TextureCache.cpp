@@ -344,7 +344,8 @@ bool TextureCache::FillTextureData(
 bool TextureCache::hackLoadEXRFromFile(
     char** outputData,
     int* width, int* height,
-    std::filesystem::path textureFile) const
+    std::filesystem::path textureFile,
+    bool toLDR) const
 {
     std::string fileName = textureFile.string();
 
@@ -428,8 +429,8 @@ bool TextureCache::hackLoadEXRFromFile(
     tinyexr::FP32 fp32_ONE; fp32_ONE.f = 1.0f;
     const uint16_t      fp16_ONE = tinyexr::float_to_half_full(fp32_ONE).u;
 
-    // first malloc byte array: RGBA16_Float is 4 channels x 2 bytes
-    const size_t bytesPerPixel = 8;
+    // first malloc byte array: RGBA16_Float is 4 channels x 2 bytes; BGRA8_UNORM is 4 x 1
+    const size_t bytesPerPixel = toLDR? 4 : 8;
     char* finalCharData = static_cast<char*>(malloc(pixelCount * bytesPerPixel));
     if (!finalCharData)
     {
@@ -439,10 +440,21 @@ bool TextureCache::hackLoadEXRFromFile(
 
     // store texture； Can directly use FP16
     uint16_t* fp16Data = reinterpret_cast<uint16_t*>(finalCharData);
+    uint8_t*  u8Data = reinterpret_cast<uint8_t*>(finalCharData);
     assert(finalCharData != nullptr && fp16Data != nullptr,
-        L"Failed to reinterpret_cast for RGBA16_FLOAT EXR texture.");
+        L"Failed to reinterpret_cast for EXR texture.");
 
     size_t idxSrc, idxDst;
+    // used for converting to BGRA8_UNORM
+    auto convertToU8 = [](uint16_t value) -> uint8_t {
+        tinyexr::FP16 half; half.u = value;
+        float fHDR = tinyexr::half_to_float(half).f;
+        // toneMap to 0.0-1.0
+        float fLDR = fHDR / (1.0f + fHDR);
+
+        return static_cast<uint8_t>(fLDR * 256.f);
+        };
+    
     for (size_t i = 0; i < image.height; ++i)
     {
         for (size_t j = 0; j < image.width; ++j)
@@ -450,10 +462,19 @@ bool TextureCache::hackLoadEXRFromFile(
             idxSrc = i * image.width + j;
             idxDst = i * image.width + j;
 
-            fp16Data[4 * idxDst + 0] = r[idxSrc];
-            fp16Data[4 * idxDst + 1] = g[idxSrc];
-            fp16Data[4 * idxDst + 2] = b[idxSrc];
-            fp16Data[4 * idxDst + 3] = a ? a[idxSrc] : fp16_ONE;
+            if (!toLDR) {
+                // store directly to uint16_t*
+                fp16Data[4 * idxDst + 0] = r[idxSrc];
+                fp16Data[4 * idxDst + 1] = g[idxSrc];
+                fp16Data[4 * idxDst + 2] = b[idxSrc];
+                fp16Data[4 * idxDst + 3] = a ? a[idxSrc] : fp16_ONE;
+            }
+            else {
+                u8Data[4 * idxDst + 0] = convertToU8(b[idxSrc]);
+                u8Data[4 * idxDst + 1] = convertToU8(g[idxSrc]);
+                u8Data[4 * idxDst + 2] = convertToU8(r[idxSrc]);
+                u8Data[4 * idxDst + 3] = convertToU8(a ? a[idxSrc] : fp16_ONE);
+            }
         }
     }
 
@@ -608,7 +629,7 @@ bool TextureCache::hackLoadJitterFromFile(
             {
 
                 idxSrc = y * imgWidth + x;
-                idxDst = y * imgWidth + x;  // each depth stored as a D24S8-encoded fp32
+                idxDst = y * imgWidth + x;  // each depth stored as a D24S8-encoded bits
 
                 // Key: convert FP16 to D24S8 format, where LS 8 bits are stencil set to 0
                 // Extract 24 depth bits
@@ -822,15 +843,11 @@ std::shared_ptr<TextureData> TextureCache::hackLoadTextureFromFile(
     HackDataType dtype)
 {
     std::shared_ptr<TextureData> texture = CreateTextureData();
-    texture->path = path.generic_string();
-
-
-    // 1. vfs::IFileSystem works relative to project root, while cwd is at _build/
-    // 2. path.generic_string() = texture->path = string("/media/......"), the leading '/' will cause
-    // problem when concatenating fs::path 
-    std::string pathStr = std::filesystem::current_path().parent_path().generic_string() + path.generic_string();
+    std::string pathStr = path.generic_string();
+    texture->path = pathStr;
 
     int width = 0, height = 0;
+    char* data = nullptr;
     char const* err = nullptr;
     int channels = 4;
     // LDR, HDR, MV, Depth are BGRA8_UNORM, RGBA16_FLOAT, RG16_FLOAT, D24S8 respectively.
@@ -839,45 +856,21 @@ std::shared_ptr<TextureData> TextureCache::hackLoadTextureFromFile(
     {
     case HackDataType::COLOR_LDR:
     {
-        unsigned char* data = nullptr;
-
-        // Get image information from file
-        if (!stbi_info(pathStr.c_str(), &width, &height, &channels)) {
-            log::error("Couldn't process image header for texture '%s'", texture->path.c_str());
-            return nullptr;
-        }
-
-        // Check if the image is HDR
-        assert(!stbi_is_hdr(pathStr.c_str()), "LDR hack frame captures must be hdr");
-        assert(channels == 4, "LDR hack frame captures must have 4 channelsm got %d", originalChannels);
-
-        int bytesPerPixel = channels * 1;  // format should be BGRA8_UNORM thus 1 byte per pixel
-
-        data = stbi_load(pathStr.c_str(), &width, &height, &channels, channels);
-
-        if (!data) {
+        if (!hackLoadEXRFromFile(&data, &width, &height, pathStr, true /* toLDR */)) {
             log::error("Couldn't load generic texture '%s'", texture->path.c_str());
             return nullptr;
         }
         texture->format = nvrhi::Format::BGRA8_UNORM;
-        texture->data = std::make_shared<StbImageBlob>(data);
-
-        data = nullptr; // ownership transferred to the blob
+        texture->data = std::make_shared<Blob>(data, bytesPerPixel * width * height);
 
         break;
     }
     case HackDataType::COLOR_HDR:
     {
-        char* data = nullptr;
-
-        if (!hackLoadEXRFromFile(&data, &width, &height, pathStr))
-        {
+        if (!hackLoadEXRFromFile(&data, &width, &height, pathStr, false /* toLDR */)) {
             log::error("Couldn't load EXR frame '%s'", texture->path.c_str());
             return nullptr;
         }
-        // RGBA16_FLOAT
-        uint32_t channels = 4;
-        uint32_t bytesPerPixel = 4 * 2;
         texture->format = nvrhi::Format::RGBA16_FLOAT;
         texture->data = std::make_shared<Blob>(data, bytesPerPixel * width * height);
 
@@ -885,14 +878,10 @@ std::shared_ptr<TextureData> TextureCache::hackLoadTextureFromFile(
     }
     case HackDataType::MOTION_VECTORS:
     {
-        char* data = nullptr;
-
         if (!hackLoadJitterFromFile(&data, &width, &height, pathStr, true /* isMV */)) {
             log::error("Couldn't load EXR MV '%s'", texture->path.c_str());
             return nullptr;
         }
-        // RG16_FLOAT
-        uint32_t bytesPerPixel = 2 * 2;
         texture->format = nvrhi::Format::RG16_FLOAT;
         texture->data = std::make_shared<Blob>(data, bytesPerPixel * width * height);
 
@@ -900,14 +889,10 @@ std::shared_ptr<TextureData> TextureCache::hackLoadTextureFromFile(
     }
     case HackDataType::GBUFFER_DEPTH:
     {
-        char* data = nullptr;
-
         if (!hackLoadJitterFromFile(&data, &width, &height, pathStr, false /* isMV */)) {
             log::error("Couldn't load EXR Depth '%s'", texture->path.c_str());
             return nullptr;
         }
-        // D24S8
-        uint32_t bytesPerPixel = 4;
         texture->format = nvrhi::Format::D24S8;
         texture->data = std::make_shared<Blob>(data, bytesPerPixel * width * height);
 
@@ -919,6 +904,8 @@ std::shared_ptr<TextureData> TextureCache::hackLoadTextureFromFile(
         return nullptr;
     }
 
+    // ownership transferred to the blob
+    data = nullptr; 
 
     // write common attributes
     texture->width = static_cast<uint32_t>(width);
@@ -1097,9 +1084,13 @@ int TextureCache::TraverseFolderPath(
     std::vector<float2>& jitterXY,
     std::string extension)
 {
-    int count = m_fs->enumerateFiles(folderPath, { extension }, 
+    /// vfs::IFileSystem works relative to project root, i.e. "/media/whatever"
+    /// while cwd is at _build/, i.e. "../media/whatever"
+    std::filesystem::path ifsPath(folderPath.string().substr(2));
+    int count = m_fs->enumerateFiles(ifsPath, { extension },
         [&folderPath, &outPaths](std::string_view name)
         {
+            // but still output correct relative path for tinyexr to use
             outPaths.push_back((folderPath / name).generic_string());
         });
 

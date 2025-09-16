@@ -257,6 +257,7 @@ int main(int __argc, const char* const* __argv)
     }
 
     auto scripting = ScriptingConfig(__argc, __argv);
+    auto hackOptions = RenderTargets::parseHackOptions(__argc, __argv);
 
 #ifdef _DEBUG
     checkSig = false;
@@ -329,6 +330,8 @@ int main(int __argc, const char* const* __argv)
         std::shared_ptr<UIRenderer> gui = std::make_shared<UIRenderer>(deviceManager, pApp->getASample(), uiData);
 
         gui->Init(pApp->GetShaderFactory());
+
+        pApp->setAppHackOptions(hackOptions);
 
         deviceManager->AddRenderPassToBack(pApp.get());
         deviceManager->AddRenderPassToBack(gui.get());

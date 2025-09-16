@@ -301,18 +301,133 @@ public:
         commandList->clearTextureFloat(hackHdrColor, nvrhi::AllSubresources, nvrhi::Color(0.f));
     }
 
-    bool LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache, nvrhi::CommandListHandle cmdlist) {
-        // ### hard code things for now ###
-        // NOTE: sdk has a virtual fs IFileSystem, which doesn't take path relative to cwd
-        hackPaths = {
-            std::filesystem::path("/media/TEST_SCENE/input_TEST"),
-            std::filesystem::path("/media/TEST_SCENE/NPP_JI"),
-            std::filesystem::path("/media/TEST_SCENE/MVD_JI"),
-            std::filesystem::path("/media/TEST_SCENE/MVD_JI"),
-        };
-        hackNumFrames = 1;
-        // ######
+    /**
+     * Will be called in App scope, create a permanent HackOptionDef object stored in App.
+     */
+    static HackOptionDef parseHackOptions(int argc, const char* const* argv) {
+		HackOptionDef options;
 
+        std::vector<std::string> argList(argv + 1, argv + argc);  // Skip argv[0]
+
+		// counter to sanity check hackPaths, result written to options.frameCount 
+        auto count_exr_files = [](const std::filesystem::path& folderPath) {
+            return std::count_if(std::filesystem::directory_iterator(folderPath), std::filesystem::directory_iterator{}, [](const auto& entry) {
+                return entry.path().extension() == ".exr";
+                });
+            };
+
+        // parse other options only when global switch "-EnableHack" is set
+        bool         hackMode = false;
+        for (size_t currentArg = 0; currentArg < argList.size(); currentArg++)
+        {
+            std::string command = argList[currentArg];
+            if (command == "-EnableHack")
+            {
+                // we reset HackOptions otherwise bool fields can't be overwritten to false
+                hackMode = true;
+                options.enableHack = true;
+                continue;
+            }
+            if (hackMode && command == "-Identifier")
+            {
+                // We require at least 1 argument
+                assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != '-',
+                    "-Identifier requires a input to be provided (usage: -Identifier <input>");
+                options.identifier = argList[currentArg + 1];
+                currentArg++;
+                continue;
+            }
+            if (hackMode && command == "-RenderResolution")
+            {
+                // We require at least 1 argument
+                assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
+                    "-RenderResolution requires a input to be provided (usage: -RenderResolution <1 or 2 or 4>");
+                int resOption = std::stoi(argList[currentArg + 1]);
+                assert(resOption == 1 || resOption == 2 || resOption == 4,
+                    L"usage: -RenderResolution <1 or 2 or 4>, got %d", resOption);
+                options.renderResolution = static_cast<HackOptionDef::HackRenderResolution>(resOption);
+
+                currentArg++;
+                continue;
+            }
+            if (hackMode && command == "-ParseJitter")
+            {
+                options.parseJitter = true;
+                continue;
+            }
+            if (hackMode && command == "-HackPaths")
+            {
+                // We require at least 1 argument
+                assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
+                    "-HackPaths requires a input to be provided (usage: -HackPaths <input>");
+
+                options.hackPaths.push_back(std::filesystem::path(argList[currentArg + 1]));
+                /// we need 3 entries of 2 subfolders:
+                auto parentPath = options.hackPaths.front().parent_path();
+                auto jitterPath = parentPath += "/MVD_JI";
+                assert(std::filesystem::exists(jitterPath), "Encoded MVs and Depths exr files must be stored in %s", jitterPath.c_str());
+                options.hackPaths.push_back(jitterPath);
+                //options.hackPaths.push_back(jitterPath);
+
+                const auto nTargets = count_exr_files(std::filesystem::path(options.hackPaths.front()));
+                const auto jitterCount = count_exr_files(std::filesystem::path(options.hackPaths.back()));
+                assert(nTargets == jitterCount,
+                    "frame capture count and jitter count should match, but got %d and %d", nTargets, jitterCount);
+
+                options.frameCount = static_cast<size_t>(nTargets);
+                /// When "-HackPaths" comes before "-OutputMaxCount", nothing to do here
+                /// When "-OutputMaxCount" comes first, we cap it.
+                if (options.outputMaxCount > options.frameCount) {
+                    options.outputMaxCount = options.frameCount;
+                }
+
+                currentArg++;
+                continue;
+            }
+            if (hackMode && command == "-StoreOutput")
+            {
+                options.storeOutput = true;
+                continue;
+            }
+            if (hackMode && command == "-OutputMaxCount")
+            {
+                // We require at least 1 argument
+                assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
+                    "-OutputMaxCount requires a input to be provided (usage: -OutputMaxCount <input>");
+
+                /// When "-HackPaths" comes before "-OutputMaxCount", we cap it here
+                /// When "-OutputMaxCount" comes first, "-HackPaths" will cap it.
+                options.outputMaxCount = std::stoull(argList[currentArg + 1]);  // size_t is u long long
+                if (options.frameCount > 0 && options.hackPaths.empty() == false) {
+                    options.outputMaxCount = std::min(options.outputMaxCount, options.frameCount);
+                }
+
+                currentArg++;
+                continue;
+            }
+
+            if (hackMode && command == "-OutputPath")
+            {
+                // We require at least 1 argument
+                assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
+                    L"-OutputPath requires a input to be provided (usage: -OutputPath <input>");
+                options.outPath = std::filesystem::path(argList[currentArg + 1]);
+                currentArg++;
+                continue;
+            }
+        }
+
+        return options;
+    }
+
+    /**
+     * Copy the parmanent option in App to RenderTargets local.
+     */
+    void setHackOptions(const HackOptionDef& options) {
+        hackOptions = options;
+	}
+
+    bool LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache) {
 		typedef donut::engine::TextureCache::HackDataType hackDataType;
 
         auto loadFrameCaptures = [&]
@@ -320,17 +435,23 @@ public:
             -> std::vector<std::filesystem::path> 
             {
                 std::vector<std::filesystem::path> filePaths;
-				std::string extension = dtype == hackDataType::COLOR_LDR ? ".png" : ".exr";
+				bool shouldParseJitter = dtype == hackDataType::COLOR_HDR && hackOptions.parseJitter;
                 size_t nFiles = textureCache->TraverseFolderPath(
-                    hackPath, filePaths, dtype == hackDataType::COLOR_HDR, hackLoadedJitterOffsets, extension);
+                    hackPath, filePaths, shouldParseJitter, hackLoadedJitterOffsets, ".exr");
+                // double check
+                assert(nFiles == hackOptions.frameCount,
+                    "#input files counted by TraverseFolder() (%d) and lambda function in parser (%d) don't match.",
+                    nTextures,
+                    hackOptions.frameCount);
 
-                if (nFiles < hackNumFrames) {
+
+                if (nFiles < hackOptions.outputMaxCount) {
                     donut::log::error("Expect to run %d frames more than %s frame captures: %d",
-                        hackNumFrames, extension, nFiles);
+                        hackOptions.outputMaxCount, hackPath.generic_string(), nFiles);
                 }
 
                 // we may want to run only 5 frames even there are 60 in the folder
-                for (size_t frameIdx = 0; frameIdx < hackNumFrames; ++frameIdx) {
+                for (size_t frameIdx = 0; frameIdx < hackOptions.outputMaxCount; ++frameIdx) {
                     auto& filePath = filePaths[frameIdx];
 
                     std::shared_ptr<donut::engine::TextureData> loadedTexture = 
@@ -351,7 +472,7 @@ public:
                         hackLoadedDepths.push_back(loadedTexture);
                         break;
                     default:
-                        donut::log::error("Unsupported extension %s in LoadHackTextures", extension);
+                        donut::log::error("Unsupported hackDataType %d", static_cast<int>(dtype));
                         break;
                     }
                 }
@@ -359,11 +480,11 @@ public:
                 return filePaths;
             };
 
-        auto pngFiles = loadFrameCaptures(hackPaths[0], hackDataType::COLOR_LDR);
-        auto exrFiles = loadFrameCaptures(hackPaths[1], hackDataType::COLOR_HDR);
-		auto mvFiles = loadFrameCaptures(hackPaths[2], hackDataType::MOTION_VECTORS);
-		auto depthFiles = loadFrameCaptures(hackPaths[3], hackDataType::GBUFFER_DEPTH);
+        auto pngFiles = loadFrameCaptures(hackOptions.hackPaths[0], hackDataType::COLOR_LDR);
+        auto exrFiles = loadFrameCaptures(hackOptions.hackPaths[0], hackDataType::COLOR_HDR);
+		auto mvFiles = loadFrameCaptures(hackOptions.hackPaths[1], hackDataType::MOTION_VECTORS);
+		auto depthFiles = loadFrameCaptures(hackOptions.hackPaths[1], hackDataType::GBUFFER_DEPTH);
 
-        return false;
+        return true;
     }
 };

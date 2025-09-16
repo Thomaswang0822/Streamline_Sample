@@ -249,6 +249,10 @@ private:
     donut::math::int2                               m_DLSSRR_Last_DisplaySize = { 0,0 };
 
 public:
+    // Hack runtime options
+    RenderTargets::HackOptionDef                    hackOptions;
+
+public:
     StreamlineSample(DeviceManager* deviceManager, sl::ViewportHandle vpHandle, UIData& ui, const std::string& sceneName, ScriptingConfig scriptingConfig);
     ~StreamlineSample();
 
@@ -350,6 +354,13 @@ struct MultiViewportApp : public ApplicationBase
     virtual bool ShouldRenderUnfocused() override
     { 
         return true; 
+    }
+
+    inline void setAppHackOptions(const RenderTargets::HackOptionDef& options) {
+        assert(m_pViewports.size() > 0, "setAppHackOptions() should be called after populating m_pViewports");
+        for (auto& vp : m_pViewports) {
+            vp->m_pSample->hackOptions = options;
+        }
     }
 
 private:

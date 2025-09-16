@@ -1070,11 +1070,14 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
             m_RenderTargets = std::make_unique<RenderTargets>();
             m_RenderTargets->Init(GetDevice(), renderSize, m_DisplaySize, framebuffer->getDesc().colorAttachments[0].texture->getDesc().format);
 
+            // copy app-scope hack options to RT-scope
+            m_RenderTargets->setHackOptions(hackOptions);
+
             // Load hack data
-            auto texCache = GetTextureCache();
-            m_CommandList->open();
-            m_RenderTargets->LoadHackTextures(texCache, m_CommandList);
-            m_CommandList->close();
+            if (hackOptions.enableHack) {
+                std::shared_ptr<TextureCache> texCache = GetTextureCache();
+                assert(m_RenderTargets->LoadHackTextures(texCache), "load hack texture data failed");
+            }
 
 #ifdef STREAMLINE_FEATURE_DLSS_RR
             if(GetDevice()->getGraphicsAPI() != nvrhi::GraphicsAPI::D3D11)
@@ -1205,25 +1208,26 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     const auto& _checkJitter = m_RenderTargets->hackLoadedJitterOffsets;
     auto descHackMV = m_RenderTargets->hackMotionVectors->getDesc();
     auto descDepth = m_RenderTargets->Depth->getDesc();
-    if (m_RenderTargets->hackEnabled) {
-        const TextureSubresourceData& layoutLDR = m_RenderTargets->hackLoadedColorsLDR[0]->dataLayout[0][0];
+    if (hackOptions.enableHack) {
+        uint32_t hackFrameId = GetFrameIndex() % hackOptions.outputMaxCount;
+        const TextureSubresourceData& layoutLDR = m_RenderTargets->hackLoadedColorsLDR[hackFrameId]->dataLayout[0][0];
         m_CommandList->writeTexture(m_RenderTargets->hackPreUIColor, 0, 0,
-            static_cast<const void*>(m_RenderTargets->hackLoadedColorsLDR[0]->data->data()),
+            static_cast<const void*>(m_RenderTargets->hackLoadedColorsLDR[hackFrameId]->data->data()),
             layoutLDR.rowPitch, layoutLDR.depthPitch);
 
-        const TextureSubresourceData& layoutHDR = m_RenderTargets->hackLoadedColorsHDR[0]->dataLayout[0][0];
+        const TextureSubresourceData& layoutHDR = m_RenderTargets->hackLoadedColorsHDR[hackFrameId]->dataLayout[0][0];
         m_CommandList->writeTexture(m_RenderTargets->hackHdrColor, 0, 0,
-            static_cast<const void*>(m_RenderTargets->hackLoadedColorsHDR[0]->data->data()),
+            static_cast<const void*>(m_RenderTargets->hackLoadedColorsHDR[hackFrameId]->data->data()),
             layoutHDR.rowPitch, layoutHDR.depthPitch);
 
-        const TextureSubresourceData& layoutMV = m_RenderTargets->hackLoadedMVs[0]->dataLayout[0][0];
+        const TextureSubresourceData& layoutMV = m_RenderTargets->hackLoadedMVs[hackFrameId]->dataLayout[0][0];
         m_CommandList->writeTexture(m_RenderTargets->hackMotionVectors, 0, 0,
-            static_cast<const void*>(m_RenderTargets->hackLoadedMVs[0]->data->data()),
+            static_cast<const void*>(m_RenderTargets->hackLoadedMVs[hackFrameId]->data->data()),
             layoutMV.rowPitch, layoutMV.depthPitch);
 
-        const TextureSubresourceData& layoutDepth = m_RenderTargets->hackLoadedDepths[0]->dataLayout[0][0];
+        const TextureSubresourceData& layoutDepth = m_RenderTargets->hackLoadedDepths[hackFrameId]->dataLayout[0][0];
         m_CommandList->writeTexture(m_RenderTargets->hackDepth, 0, 0,
-            static_cast<const void*>(m_RenderTargets->hackLoadedDepths[0]->data->data()),
+            static_cast<const void*>(m_RenderTargets->hackLoadedDepths[hackFrameId]->data->data()),
             layoutDepth.rowPitch, layoutDepth.depthPitch);
 
         // MV and depth need to restore resources state after copy; probably because they are not virtual textures
@@ -1316,8 +1320,8 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         float aspectRatio = float(m_RenderingRectSize.x) / float(m_RenderingRectSize.y);
         float4x4 projection = perspProjD3DStyleReverse(dm::radians(m_CameraVerticalFov), aspectRatio, zNear);
 
-        float2 jitterOffset = m_RenderTargets->hackEnabled ? 
-            m_RenderTargets->hackLoadedJitterOffsets[0] :
+        float2 jitterOffset = hackOptions.enableHack ?
+            m_RenderTargets->hackLoadedJitterOffsets[GetFrameIndex() % hackOptions.outputMaxCount] :
             std::dynamic_pointer_cast<PlanarView, IView>(m_View)->GetPixelOffset();
 
         sl::Constants slConstants = {};
@@ -1346,7 +1350,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
 
     // TAG STREAMLINE RESOURCES
-    if (m_RenderTargets->hackEnabled) {
+    if (hackOptions.enableHack) {
         NVWrapper::Get().TagResources_General(m_CommandList,
             m_View->GetChildView(ViewType::PLANAR, 0),
             m_RenderTargets->hackMotionVectors,
@@ -1379,7 +1383,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     // ANTI-ALIASING
 
     // TAG STREAMLINE RESOURCES
-    if (m_RenderTargets->hackEnabled) {
+    if (hackOptions.enableHack) {
         NVWrapper::Get().TagResources_DLSS_NIS(m_CommandList,
             m_View->GetChildView(ViewType::PLANAR, 0),
             m_RenderTargets->AAResolvedColor,
@@ -1576,7 +1580,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         };
 
         int counter = 0;
-        if (m_RenderTargets->hackEnabled) {
+        if (hackOptions.enableHack) {
             displayDebugPiP(m_RenderTargets->hackMotionVectors, int2(counter% SubWindowNumber, counter++ / SubWindowNumber), 1 / float(SubWindowNumber));
             displayDebugPiP(m_RenderTargets->hackDepth, int2(counter% SubWindowNumber, counter++ / SubWindowNumber), 1 / float(SubWindowNumber));
         }
