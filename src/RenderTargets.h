@@ -66,17 +66,14 @@ public:
     nvrhi::TextureHandle GBufferEmissiveRR;
 
 #pragma region HACK
-    // general
-    bool hackEnabled = true;
-    size_t hackNumFrames;
-    std::vector<std::filesystem::path> hackPaths;
+    // general options are in base class GBufferRenderTargets
     // data storage: loaded textures
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedColorsLDR;
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedColorsHDR;
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedMVs;
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedDepths;
-    std::vector<std::pair<float, float>> hackLoadedJitterXY;
-    // used for render targets
+    std::vector<donut::math::float2> hackLoadedJitterOffsets;
+    // used for render targets; MV and Depth are in GBufferRenderTargets
     nvrhi::TextureHandle hackPreUIColor;
     nvrhi::TextureHandle hackHdrColor;
     
@@ -325,7 +322,7 @@ public:
                 std::vector<std::filesystem::path> filePaths;
 				std::string extension = dtype == hackDataType::COLOR_LDR ? ".png" : ".exr";
                 size_t nFiles = textureCache->TraverseFolderPath(
-                    hackPath, filePaths, dtype == hackDataType::COLOR_HDR, hackLoadedJitterXY, extension);
+                    hackPath, filePaths, dtype == hackDataType::COLOR_HDR, hackLoadedJitterOffsets, extension);
 
                 if (nFiles < hackNumFrames) {
                     donut::log::error("Expect to run %d frames more than %s frame captures: %d",

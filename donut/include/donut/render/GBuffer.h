@@ -25,6 +25,7 @@
 #include <donut/core/math/math.h>
 #include <nvrhi/nvrhi.h>
 #include <memory>
+#include <filesystem>
 
 namespace donut::engine
 {
@@ -50,8 +51,15 @@ namespace donut::render
 
         nvrhi::TextureHandle MotionVectors;
 
+#pragma region HACK
+        // general
+        bool hackEnabled = true;
+        size_t hackNumFrames;
+        std::vector<std::filesystem::path> hackPaths;
+        // render targets
         nvrhi::TextureHandle hackMotionVectors;
         nvrhi::TextureHandle hackDepth;
+#pragma endregion
 
         std::shared_ptr<engine::FramebufferFactory> GBufferFramebuffer;
 

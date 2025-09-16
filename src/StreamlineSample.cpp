@@ -573,6 +573,8 @@ void StreamlineSample::CreateRenderPasses(bool& exposureResetRequired, float lod
 
     m_SkyPass = std::make_unique<SkyPass>(GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->ForwardFramebuffer, *m_View);
 
+    // TAA pass is only used if (m_ui.AAMode == AntiAliasingMode::TEMPORAL), 
+    // but we have DLSS, thus no need to tag hack render targets here.
     {
         TemporalAntiAliasingPass::CreateParameters taaParams;
         taaParams.sourceDepth = m_RenderTargets->Depth;
@@ -1196,6 +1198,41 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
                 *m_GBufferPass,
                 gbufferContext,
                 "GBufferFill");
+
+    auto _checkLDR = m_RenderTargets->hackPreUIColor->getDesc();
+    auto _checkHDR = m_RenderTargets->hackHdrColor->getDesc();
+    auto _checkMV = m_RenderTargets->MotionVectors->getDesc();
+    const auto& _checkJitter = m_RenderTargets->hackLoadedJitterOffsets;
+    auto descHackMV = m_RenderTargets->hackMotionVectors->getDesc();
+    auto descDepth = m_RenderTargets->Depth->getDesc();
+    if (m_RenderTargets->hackEnabled) {
+        const TextureSubresourceData& layoutLDR = m_RenderTargets->hackLoadedColorsLDR[0]->dataLayout[0][0];
+        m_CommandList->writeTexture(m_RenderTargets->hackPreUIColor, 0, 0,
+            static_cast<const void*>(m_RenderTargets->hackLoadedColorsLDR[0]->data->data()),
+            layoutLDR.rowPitch, layoutLDR.depthPitch);
+
+        const TextureSubresourceData& layoutHDR = m_RenderTargets->hackLoadedColorsHDR[0]->dataLayout[0][0];
+        m_CommandList->writeTexture(m_RenderTargets->hackHdrColor, 0, 0,
+            static_cast<const void*>(m_RenderTargets->hackLoadedColorsHDR[0]->data->data()),
+            layoutHDR.rowPitch, layoutHDR.depthPitch);
+
+        const TextureSubresourceData& layoutMV = m_RenderTargets->hackLoadedMVs[0]->dataLayout[0][0];
+        m_CommandList->writeTexture(m_RenderTargets->hackMotionVectors, 0, 0,
+            static_cast<const void*>(m_RenderTargets->hackLoadedMVs[0]->data->data()),
+            layoutMV.rowPitch, layoutMV.depthPitch);
+
+        const TextureSubresourceData& layoutDepth = m_RenderTargets->hackLoadedDepths[0]->dataLayout[0][0];
+        m_CommandList->writeTexture(m_RenderTargets->hackDepth, 0, 0,
+            static_cast<const void*>(m_RenderTargets->hackLoadedDepths[0]->data->data()),
+            layoutDepth.rowPitch, layoutDepth.depthPitch);
+
+        // MV and depth need to restore resources state after copy; probably because they are not virtual textures
+        m_CommandList->setTextureState(m_RenderTargets->hackMotionVectors, nvrhi::AllSubresources, descHackMV.initialState);
+        m_CommandList->setTextureState(m_RenderTargets->hackDepth, nvrhi::AllSubresources, descDepth.initialState);
+        m_CommandList->commitBarriers();
+
+    }
+
 #ifdef STREAMLINE_FEATURE_DLSS_RR
     if(m_ui.RayTracing_Mode && GetDevice()->getGraphicsAPI() != nvrhi::GraphicsAPI::D3D11)
     {   
@@ -1279,7 +1316,9 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         float aspectRatio = float(m_RenderingRectSize.x) / float(m_RenderingRectSize.y);
         float4x4 projection = perspProjD3DStyleReverse(dm::radians(m_CameraVerticalFov), aspectRatio, zNear);
 
-        float2 jitterOffset = std::dynamic_pointer_cast<PlanarView, IView>(m_View)->GetPixelOffset();
+        float2 jitterOffset = m_RenderTargets->hackEnabled ? 
+            m_RenderTargets->hackLoadedJitterOffsets[0] :
+            std::dynamic_pointer_cast<PlanarView, IView>(m_View)->GetPixelOffset();
 
         sl::Constants slConstants = {};
         slConstants.cameraAspectRatio = aspectRatio;
@@ -1307,39 +1346,6 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
 
     // TAG STREAMLINE RESOURCES
-    auto _checkLDR = m_RenderTargets->hackPreUIColor->getDesc();
-    auto _checkHDR = m_RenderTargets->hackHdrColor->getDesc();
-	auto _checkMV = m_RenderTargets->MotionVectors->getDesc();
-	auto descHackMV = m_RenderTargets->hackMotionVectors->getDesc();
-	auto descDepth = m_RenderTargets->Depth->getDesc();
-    if (m_RenderTargets->hackEnabled) {
-        const TextureSubresourceData& layoutLDR = m_RenderTargets->hackLoadedColorsLDR[0]->dataLayout[0][0];
-        m_CommandList->writeTexture(m_RenderTargets->hackPreUIColor, 0, 0, 
-            static_cast<const void*>(m_RenderTargets->hackLoadedColorsLDR[0]->data->data()),
-            layoutLDR.rowPitch, layoutLDR.depthPitch);
-
-        const TextureSubresourceData& layoutHDR = m_RenderTargets->hackLoadedColorsHDR[0]->dataLayout[0][0];
-        m_CommandList->writeTexture(m_RenderTargets->hackHdrColor, 0, 0,
-            static_cast<const void*>(m_RenderTargets->hackLoadedColorsHDR[0]->data->data()),
-            layoutHDR.rowPitch, layoutHDR.depthPitch);
-
-        const TextureSubresourceData& layoutMV = m_RenderTargets->hackLoadedMVs[0]->dataLayout[0][0];
-        m_CommandList->writeTexture(m_RenderTargets->hackMotionVectors, 0, 0,
-            static_cast<const void*>(m_RenderTargets->hackLoadedMVs[0]->data->data()),
-            layoutMV.rowPitch, layoutMV.depthPitch);
-
-        const TextureSubresourceData& layoutDepth = m_RenderTargets->hackLoadedDepths[0]->dataLayout[0][0];
-        m_CommandList->writeTexture(m_RenderTargets->hackDepth, 0, 0,
-            static_cast<const void*>(m_RenderTargets->hackLoadedDepths[0]->data->data()),
-            layoutDepth.rowPitch, layoutDepth.depthPitch);
-
-		// MV and depth need to restore resources state after copy; probably because they are not virtual textures
-        m_CommandList->setTextureState(m_RenderTargets->hackMotionVectors, nvrhi::AllSubresources, descHackMV.initialState);
-        m_CommandList->setTextureState(m_RenderTargets->hackDepth, nvrhi::AllSubresources, descDepth.initialState);
-        m_CommandList->commitBarriers();
-
-    }
-
     if (m_RenderTargets->hackEnabled) {
         NVWrapper::Get().TagResources_General(m_CommandList,
             m_View->GetChildView(ViewType::PLANAR, 0),

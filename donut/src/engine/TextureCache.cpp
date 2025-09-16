@@ -464,7 +464,7 @@ bool TextureCache::hackLoadEXRFromFile(
     return true;
 }
 
-bool donut::engine::TextureCache::hackLoadJitterFromFile(
+bool TextureCache::hackLoadJitterFromFile(
     char** outputData,
     int* width, int* height,
     std::filesystem::path textureFile,
@@ -577,6 +577,16 @@ bool donut::engine::TextureCache::hackLoadJitterFromFile(
     if (isMV)
     {
         uint16_t* fp16Data = reinterpret_cast<uint16_t*>(charData);
+        // donut has mvec in pixel space
+        const float ratioX = static_cast<float>(imgWidth);
+        const float ratioY = static_cast<float>(imgHeight);
+        auto scaleMV = [](uint16_t value, float ratio) -> uint16_t
+            {
+                tinyexr::FP16 half; half.u = value;
+                tinyexr::FP32 flt = half_to_float(half);
+                flt.f *= ratio;
+                return float_to_half_full(flt).u;
+            };
         for (int y = 0; y < imgHeight; y++)
         {
             for (int x = 0; x < imgWidth; x++)
@@ -585,8 +595,8 @@ bool donut::engine::TextureCache::hackLoadJitterFromFile(
                 idxDst = (y * imgWidth + x) * 2;  // each mv stored as 2 fp16
 
                 // no interpolation needed
-                fp16Data[idxDst] = r[idxSrc];  // mv.X
-                fp16Data[idxDst + 1] = g[idxSrc];  // mv.Y
+                fp16Data[idxDst]     = scaleMV(r[idxSrc], ratioX);  // mv.X
+                fp16Data[idxDst + 1] = scaleMV(g[idxSrc], ratioY);  // mv.Y
             }
         } // end iterating the image
     }
@@ -608,7 +618,7 @@ bool donut::engine::TextureCache::hackLoadJitterFromFile(
                 // Convert float to 24-bit integer depth
                 const uint32_t u24MAX = (1 << 24) - 1;
                 uint32_t depth24 = static_cast<uint32_t>(depthValue * u24MAX);
-                u32Data[idxDst] = (depth24 << 0);
+                u32Data[idxDst] = (depth24 << 8);
             }
         } // end iterating the image
     }
@@ -1084,7 +1094,7 @@ int TextureCache::TraverseFolderPath(
     const std::filesystem::path& folderPath, 
     std::vector<std::filesystem::path>& outPaths, 
     bool extractJitter,
-    std::vector<std::pair<float, float>>& jitterXY,
+    std::vector<float2>& jitterXY,
     std::string extension)
 {
     int count = m_fs->enumerateFiles(folderPath, { extension }, 
@@ -1115,8 +1125,10 @@ int TextureCache::TraverseFolderPath(
                     donut::log::error("EXR jitter filename %ls does not have expected number of underscores.", pathStr);
 
                 // 2nd-last X, last Y
-                jitterXY.push_back(
-                    { std::stof(pathStr.substr(secondLastDelim + 1, lastDelim - secondLastDelim - 1)), std::stof(pathStr.substr(lastDelim + 1)) });
+                jitterXY.push_back(float2(
+                    std::stof(pathStr.substr(secondLastDelim + 1, lastDelim - secondLastDelim - 1)), 
+                    std::stof(pathStr.substr(lastDelim + 1)) 
+                ));
             }
             catch (const std::exception& e)
             {

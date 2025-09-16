@@ -64,7 +64,7 @@ struct UIData
 {
     // General
     nvrhi::GraphicsAPI                  GraphicsAPI = nvrhi::GraphicsAPI::D3D12;
-    bool                                EnableAnimations = false;
+    bool                                EnableAnimations = true;
     float                               AnimationSpeed = 1.;
     bool                                EnableVsync = false;
     bool                                VisualiseBuffers = true;
@@ -86,7 +86,7 @@ public:
     donut::render::SsaoParameters       SsaoParams;
 
     // Tonemapping
-    bool                                 EnableToneMapping = false;
+    bool                                 EnableToneMapping = true;
     donut::render::ToneMappingParameters ToneMappingParams;
 
     // Sky

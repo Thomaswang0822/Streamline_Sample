@@ -215,7 +215,7 @@ namespace donut::engine
             const std::filesystem::path& folderPath,
             std::vector<std::filesystem::path>& outPaths,
             bool extractJitter,
-            std::vector<std::pair<float, float>>& jitterXY,
+            std::vector<donut::math::float2>& jitterXY,
             std::string extension);
 
         // Tells if the texture has been loaded from file successfully and its data is available in the texture object.

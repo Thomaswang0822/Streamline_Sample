@@ -114,8 +114,10 @@ void GBufferRenderTargets::Init(
         GBufferNormals,
         GBufferEmissive };
 
-    if (enableMotionVectors)
+    if (enableMotionVectors) {
         GBufferFramebuffer->RenderTargets.push_back(MotionVectors);
+        //GBufferFramebuffer->RenderTargets.push_back(hackMotionVectors);
+    }
 
     GBufferFramebuffer->DepthTarget = Depth;
 
