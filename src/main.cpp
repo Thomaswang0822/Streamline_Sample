@@ -231,8 +231,8 @@ int main(int __argc, const char* const* __argv)
 
     donut::app::DeviceCreationParameters deviceParams;
 
-    deviceParams.backBufferWidth = 2560;
-    deviceParams.backBufferHeight = 1440;
+    deviceParams.backBufferWidth = 1920;
+    deviceParams.backBufferHeight = 1080;
     deviceParams.swapChainSampleCount = 1;
     deviceParams.swapChainBufferCount = 3;
     deviceParams.startFullscreen = false;
@@ -258,6 +258,10 @@ int main(int __argc, const char* const* __argv)
 
     auto scripting = ScriptingConfig(__argc, __argv);
     auto hackOptions = RenderTargets::parseHackOptions(__argc, __argv);
+    if (hackOptions.enableHack) {
+        deviceParams.backBufferWidth = 3840;
+        deviceParams.backBufferHeight = 2160;
+    }
 
 #ifdef _DEBUG
     checkSig = false;

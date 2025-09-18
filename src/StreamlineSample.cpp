@@ -964,6 +964,8 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         if (DLSS_resizeRequired) {
             // Only quality, target width and height matter here
             NVWrapper::Get().QueryDLSSOptimalSettings(m_RecommendedDLSSSettings);
+            /// The function above will store correct render size to optimalRenderSize and minRenderSize
+            /// e.g. display = 1920x1080, renderSize = 960x540
 
             if (m_RecommendedDLSSSettings.optimalRenderSize.x <= 0 || m_RecommendedDLSSSettings.optimalRenderSize.y <= 0) {
                 m_ui.AAMode = AntiAliasingMode::NONE;
@@ -999,6 +1001,9 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
                     // We predict this never to happen. It is more of a safety measure.
                     if (newHeight >= minSize.y && newHeight <= maxSize.y) 
                         m_RenderingRectSize = { newWidth , newHeight };
+                }
+                else {
+                    m_RenderingRectSize = m_RecommendedDLSSSettings.minRenderSize;
                 }
 
                 // For dynamic ratio, we want to choose the minimum rendering size

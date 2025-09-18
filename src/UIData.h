@@ -152,10 +152,10 @@ public:
     // DLSS specific parameters
     float                               DLSS_Sharpness = 0.f;
     bool                                DLSS_Supported = false;
-    sl::DLSSMode                        DLSS_Mode = sl::DLSSMode::eDLAA;
-    RenderingResolutionMode             DLSS_Resolution_Mode = RenderingResolutionMode::DYNAMIC;
-    bool                                DLSS_Dynamic_Res_change = true;
-    AntiAliasingMode                    DLSS_Last_AA = AntiAliasingMode::NONE;
+    sl::DLSSMode                        DLSS_Mode = sl::DLSSMode::eMaxPerformance;
+    RenderingResolutionMode             DLSS_Resolution_Mode = RenderingResolutionMode::FIXED;
+    bool                                DLSS_Dynamic_Res_change = false;
+    AntiAliasingMode                    DLSS_Last_AA = AntiAliasingMode::DLSS;
     bool                                DLSS_DebugShowFullRenderingBuffer = false;
     bool                                DLSS_lodbias_useoveride = false;
     float                               DLSS_lodbias_overide = 0.f;

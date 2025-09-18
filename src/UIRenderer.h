@@ -69,6 +69,16 @@ private:
     bool    m_last_rt_mode = false;
     bool    m_rt_changed = false;
 
+    inline void update_userView_DLSSMode() {
+        if (m_ui.DLSS_Mode != sl::DLSSMode::eOff) {
+            m_dev_view_dlssrr_mode = 0;
+            if (m_ui.DLSS_Mode == sl::DLSSMode::eMaxQuality) m_dev_view_dlss_mode = 2;
+            else if (m_ui.DLSS_Mode == sl::DLSSMode::eBalanced) m_dev_view_dlss_mode = 3;
+            else if (m_ui.DLSS_Mode == sl::DLSSMode::eMaxPerformance) m_dev_view_dlss_mode = 4;
+            else if (m_ui.DLSS_Mode == sl::DLSSMode::eUltraPerformance) m_dev_view_dlss_mode = 5;
+            else if (m_ui.DLSS_Mode == sl::DLSSMode::eDLAA) m_dev_view_dlss_mode = 6;
+        }
+	}
 
 public:
     UIRenderer(DeviceManager* deviceManager, std::shared_ptr<StreamlineSample> app, UIData& ui)
@@ -85,14 +95,7 @@ public:
             ImGui::GetStyle().Colors[i].w = powf(ImGui::GetStyle().Colors[i].w, invGamma);
         }
 
-        if (m_ui.DLSS_Mode != sl::DLSSMode::eOff) {
-            m_dev_view_dlssrr_mode = 0;
-            if (m_ui.DLSS_Mode == sl::DLSSMode::eMaxQuality) m_dev_view_dlss_mode = 2;
-            else if (m_ui.DLSS_Mode == sl::DLSSMode::eBalanced) m_dev_view_dlss_mode = 3;
-            else if (m_ui.DLSS_Mode == sl::DLSSMode::eMaxPerformance) m_dev_view_dlss_mode = 4;
-            else if (m_ui.DLSS_Mode == sl::DLSSMode::eUltraPerformance) m_dev_view_dlss_mode = 5;
-            else if (m_ui.DLSS_Mode == sl::DLSSMode::eDLAA) m_dev_view_dlss_mode = 6;
-        }
+        update_userView_DLSSMode();
 
 #ifdef STREAMLINE_FEATURE_DLSS_RR
         if (m_ui.DLSSRR_Mode != sl::DLSSMode::eOff) {
@@ -353,8 +356,10 @@ protected:
                 {
                     bool is_selected = i == m_dev_view_dlss_mode;
 
-                    if (ImGui::Selectable(DLSSModeNames[i].data(), is_selected)) m_dev_view_dlss_mode = i;
-                    if (is_selected) ImGui::SetItemDefaultFocus();
+                    if (ImGui::Selectable(DLSSModeNames[i].data(), is_selected)) 
+                        m_dev_view_dlss_mode = i;
+                    if (is_selected) 
+                        ImGui::SetItemDefaultFocus();
                 }
                 ImGui::EndCombo();
                 if (ImGui::IsItemHovered()) m_ui.MouseOverUI = true;
@@ -560,14 +565,17 @@ protected:
                 {
                     for (int i = 0; i < static_cast<int>(sl::DLSSMode::eCount); ++i)
                     {
-                        if ((i == static_cast<int>(sl::DLSSMode::eUltraQuality)) || (i == static_cast<int>(sl::DLSSMode::eOff))) continue;
+                        if ((i == static_cast<int>(sl::DLSSMode::eUltraQuality)) || (i == static_cast<int>(sl::DLSSMode::eOff))) 
+                            continue;
 
                         bool is_selected = (i == (int)m_ui.DLSS_Mode);
 
                         if (ImGui::Selectable(DLSSModeNames[i], is_selected)) {
                             m_ui.DLSS_Mode = (sl::DLSSMode)i;
+							update_userView_DLSSMode();
                         }
-                        if (is_selected) ImGui::SetItemDefaultFocus();
+                        if (is_selected) 
+                            ImGui::SetItemDefaultFocus();
                     }
                     ImGui::EndCombo();
                 }

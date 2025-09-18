@@ -361,18 +361,25 @@ public:
                 assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
                     "-HackPaths requires a input to be provided (usage: -HackPaths <input>");
 
+                // store 3 paths: default NPP_JI, NPP_GT, MVD_JI
                 options.hackPaths.push_back(std::filesystem::path(argList[currentArg + 1]));
-                /// we need 3 entries of 2 subfolders:
-                auto parentPath = options.hackPaths.front().parent_path();
-                auto jitterPath = parentPath += "/MVD_JI";
+                const auto nTargets = count_exr_files(std::filesystem::path(options.hackPaths[0]));
+
+                // path += string works but path + string does not.
+                auto gtPath = options.hackPaths.front().parent_path() += "/NPP_GT";
+				assert(std::filesystem::exists(gtPath), "4k ground truth exr files must be stored in %s", gtPath.c_str());
+                options.hackPaths.push_back(gtPath);
+                const auto gtCount = count_exr_files(std::filesystem::path(options.hackPaths[1]));
+
+                auto jitterPath = options.hackPaths.front().parent_path() += "/MVD_JI";
                 assert(std::filesystem::exists(jitterPath), "Encoded MVs and Depths exr files must be stored in %s", jitterPath.c_str());
                 options.hackPaths.push_back(jitterPath);
-                //options.hackPaths.push_back(jitterPath);
+                const auto jitterCount = count_exr_files(std::filesystem::path(options.hackPaths[2]));
 
-                const auto nTargets = count_exr_files(std::filesystem::path(options.hackPaths.front()));
-                const auto jitterCount = count_exr_files(std::filesystem::path(options.hackPaths.back()));
-                assert(nTargets == jitterCount,
-                    "frame capture count and jitter count should match, but got %d and %d", nTargets, jitterCount);
+                assert(nTargets == gtCount && nTargets == jitterCount,
+                    "frame capture count and jitter count of (%s) (%s) (%s) should match, but got %d, %d, and %d", 
+					options.hackPaths[0].c_str(), options.hackPaths[1].c_str(), options.hackPaths[2].c_str(),
+                    nTargets, gtCount, jitterCount);
 
                 options.frameCount = static_cast<size_t>(nTargets);
                 /// When "-HackPaths" comes before "-OutputMaxCount", nothing to do here
@@ -418,8 +425,8 @@ public:
         }
 
         // manual change for DEBUG
+        //options.enableHack = false;
         //options.storeOutput = false;
-        options.enableHack = false;
         return options;
     }
 
@@ -483,10 +490,10 @@ public:
                 return filePaths;
             };
 
-        auto pngFiles = loadFrameCaptures(hackOptions.hackPaths[0], hackDataType::COLOR_LDR);
         auto exrFiles = loadFrameCaptures(hackOptions.hackPaths[0], hackDataType::COLOR_HDR);
-		auto mvFiles = loadFrameCaptures(hackOptions.hackPaths[1], hackDataType::MOTION_VECTORS);
-		auto depthFiles = loadFrameCaptures(hackOptions.hackPaths[1], hackDataType::GBUFFER_DEPTH);
+        auto pngFiles = loadFrameCaptures(hackOptions.hackPaths[1], hackDataType::COLOR_LDR);
+        auto mvFiles = loadFrameCaptures(hackOptions.hackPaths[2], hackDataType::MOTION_VECTORS);
+		auto depthFiles = loadFrameCaptures(hackOptions.hackPaths[2], hackDataType::GBUFFER_DEPTH);
 
         return true;
     }
