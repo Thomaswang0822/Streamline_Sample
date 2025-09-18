@@ -301,4 +301,11 @@ namespace donut::engine
         nvrhi::ResourceStates textureState,
         const char* fileName,
         bool saveAlphaChannel = true);
+
+    bool SaveHackToEXR(
+        nvrhi::IDevice* device,
+        nvrhi::ITexture* texture,
+        const char* fileName);
+
+    bool TestTinyExrWrite();
 }

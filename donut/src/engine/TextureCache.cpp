@@ -1356,6 +1356,193 @@ namespace donut::engine
         return writeSuccess;
     }
 
+    bool SaveHackToEXR(nvrhi::IDevice* device, nvrhi::ITexture* texture, const char* fileName)
+    {
+        const auto& desc = texture->getDesc();
+
+        // Create command list and staging texture
+        nvrhi::CommandListHandle commandList = device->createCommandList();
+        commandList->open();
+
+        nvrhi::StagingTextureHandle stagingTexture = device->createStagingTexture(desc, nvrhi::CpuAccessMode::Read);
+        commandList->copyTexture(stagingTexture, nvrhi::TextureSlice(), texture, nvrhi::TextureSlice());
+
+        commandList->close();
+        device->executeCommandList(commandList);
+
+        // Map staging texture - get raw data pointer
+        size_t rowPitchBytes = 0;
+        const void* rawData = device->mapStagingTexture(
+            stagingTexture, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitchBytes);
+
+        if (!rawData)
+            return false;
+
+        // Proper reinterpretation to FP16 data
+        const uint16_t* pData = reinterpret_cast<const uint16_t*>(rawData);
+
+        const uint32_t width = desc.width;
+        const uint32_t height = desc.height;
+        const int channels = 4; // RGBA
+        const size_t bytesPerPixel = 8; // 4 channels * 2 bytes each
+        const size_t expectedRowPitch = width * bytesPerPixel;
+        assert(rowPitchBytes == expectedRowPitch, "Expect rowPitchBytes to be %d, got %d", expectedRowPitch, rowPitchBytes);
+
+        // Prepare EXR structures
+        EXRHeader header;
+        InitEXRHeader(&header);
+        EXRImage exrImage;
+        InitEXRImage(&exrImage);
+
+        // Configure EXR header
+        header.num_channels = 4;
+        header.channels = new EXRChannelInfo[header.num_channels];
+        header.pixel_types = new int[header.num_channels];
+        header.requested_pixel_types = new int[header.num_channels];
+
+        /// The texture stores data in RGBA order, but TEV open it as ABGR (alphetical order).
+        //const char channel_names[] = { 'R', 'G', 'B', 'A' };
+        const char channel_names[4] = { 'A', 'B', 'G', 'R' };
+        for (int i = 0; i < header.num_channels; i++) {
+            //strncpy(header.channels[i].name, channel_names[i], 255);
+            header.channels[i].name[0] = channel_names[i];
+            header.channels[i].name[1] = '\0';
+            header.pixel_types[i] = TINYEXR_PIXELTYPE_HALF;
+            header.requested_pixel_types[i] = TINYEXR_PIXELTYPE_HALF;
+        }
+
+        header.compression_type = TINYEXR_COMPRESSIONTYPE_NONE;
+
+        // Configure EXR image
+        exrImage.num_channels = header.num_channels;
+        exrImage.width = width;
+        exrImage.height = height;
+
+        // Allocate planar arrays for RGBA channels
+        std::vector<std::vector<uint16_t>> channelData(header.num_channels);
+        for (auto& channel : channelData) {
+            channel.resize(width * height);
+        }
+
+        // Calculate row pitch in terms of uint16_t elements
+        const size_t rowPitchElements = rowPitchBytes / sizeof(uint16_t);
+
+        // Deinterleave pixel data into planar format
+        
+        for (uint32_t y = 0; y < height; y++) {
+            const uint16_t* srcRow = pData + y * rowPitchElements;
+
+            for (uint32_t x = 0; x < width; x++) {
+                const size_t dstIdx = y * width + x;
+                const size_t srcIdx = x * 4; // 4 channels per pixel
+
+                // Reverse the channel order to match EXR expectations
+                channelData[0][dstIdx] = srcRow[srcIdx + 3]; // A into R
+                channelData[1][dstIdx] = srcRow[srcIdx + 2]; // B into G
+                channelData[2][dstIdx] = srcRow[srcIdx + 1]; // G into B
+                channelData[3][dstIdx] = srcRow[srcIdx + 0]; // R into A
+            }
+        }
+
+        // Prepare channel pointers for EXR
+        std::vector<unsigned char*> imagePtrs(header.num_channels);
+        for (int i = 0; i < header.num_channels; i++) {
+            imagePtrs[i] = reinterpret_cast<unsigned char*>(channelData[i].data());
+        }
+        exrImage.images = imagePtrs.data();
+
+        // Save EXR file
+        const char* err = nullptr;
+        int ret = SaveEXRImageToFile(&exrImage, &header, fileName, &err);
+        bool success = (ret == TINYEXR_SUCCESS);
+
+        // Cleanup
+        delete[] header.channels;
+        delete[] header.pixel_types;
+        delete[] header.requested_pixel_types;
+
+        device->unmapStagingTexture(stagingTexture);
+
+        return success;
+    }
+
+    bool TestTinyExrWrite()
+    {
+        EXRHeader header;
+        EXRImage image;
+        InitEXRHeader(&header);
+        InitEXRImage(&image);
+
+        int width = 1920;
+        int height = 1080;
+        int num_channels = 4;
+
+        // Set up header
+        header.num_channels = num_channels;
+        header.channels = new EXRChannelInfo[num_channels];
+        header.pixel_types = new int[num_channels];
+        header.requested_pixel_types = new int[num_channels];
+
+        //const char names[4] = { 'R', 'G', 'B', 'A' };
+        /// TEV Viewer works like this:
+        /// It "blindly" reorders the channel in alphabetical order,
+        /// which means even if you pack data in RGBA order and set header.channels also,
+        /// it display data wrongly as ABGR.
+        /// In the channel names below, where NONE is a valid common channel name and H comes first,
+        /// no matter how we order them, 
+        /// TEV will show a single H-channel image with 0.9f as value, because it comes first.
+        const char names[4] = { 'O', 'H', 'P', 'Q' };
+        for (int i = 0; i < num_channels; i++) {
+            header.channels[i].name[0] = names[i];
+            header.channels[i].name[1] = '\0';
+            header.pixel_types[i] = TINYEXR_PIXELTYPE_HALF;
+            header.requested_pixel_types[i] = TINYEXR_PIXELTYPE_HALF;
+        }
+        header.compression_type = TINYEXR_COMPRESSIONTYPE_NONE; // No compression for simplicity
+
+        // Allocate data for each channel
+        image.num_channels = num_channels;
+        image.width = width;
+        image.height = height;
+        image.images = new unsigned char* [num_channels];
+
+        // Create distinct test values for each channel:
+        // Channel A: all 1.0f
+        // Channel R: all 0.9f
+        // Channel G: all 0.6f
+        // Channel B: all 0.1f
+        auto fToU16 = [](float value) {
+            tinyexr::FP32 f32; 
+            f32.f = value;
+            return  tinyexr::float_to_half_full(f32).u;
+            };
+        std::vector<uint16_t> dataR(width * height, fToU16(0.9f));
+        std::vector<uint16_t> dataG(width * height, fToU16(0.6f));
+        std::vector<uint16_t> dataB(width * height, fToU16(0.1f));
+        std::vector<uint16_t> dataA(width * height, fToU16(1.0f));
+
+        image.images[0] = reinterpret_cast<unsigned char*>(dataR.data());
+        image.images[1] = reinterpret_cast<unsigned char*>(dataG.data());
+        image.images[2] = reinterpret_cast<unsigned char*>(dataB.data());
+        image.images[3] = reinterpret_cast<unsigned char*>(dataA.data());
+
+        // Save the EXR file
+        const char* err = nullptr;
+        int ret = SaveEXRImageToFile(&image, &header, "D:/Code/Streamline_Sample/media/TEST_SCENE/outputs/testWrite.exr", &err);
+        if (ret != TINYEXR_SUCCESS) {
+            printf("Error: %s\n", err);
+            return 1;
+        }
+
+        // Cleanup
+        delete[] header.channels;
+        delete[] header.requested_pixel_types;
+        delete[] image.images;
+
+        printf("EXR file 'test.exr' created successfully.\n");
+        return true;
+    }
+
     bool TextureCache::IsTextureLoaded(const std::shared_ptr<LoadedTexture>& _texture)
     {
         TextureData* texture = static_cast<TextureData*>(_texture.get());

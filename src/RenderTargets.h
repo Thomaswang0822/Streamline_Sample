@@ -222,12 +222,10 @@ public:
                 NisColor,
                 AmbientOcclusion,
                 GBufferSpecularRR,
-                GBufferDiffuseRR
-                , // hack render targets
+                GBufferDiffuseRR,
+                // hack render targets
                 hackPreUIColor,
                 hackHdrColor,
-                //hackMotionVectors,
-                //hackDepth
             };
 
             for (auto texture : textures)
@@ -278,7 +276,9 @@ public:
 
     bool IsUpdateRequired(donut::math::int2 renderSize, donut::math::int2 displaySize, donut::math::uint sampleCount = 1) const
     {
-        if (any(m_RenderSize != renderSize) || any(m_DisplaySize != displaySize) || m_SampleCount != sampleCount) return true;
+        if (any(m_RenderSize != renderSize) || any(m_DisplaySize != displaySize) || m_SampleCount != sampleCount) 
+            return true;
+        
         return false;
     }
 
@@ -417,6 +417,9 @@ public:
             }
         }
 
+        // manual change for DEBUG
+        //options.storeOutput = false;
+        options.enableHack = false;
         return options;
     }
 

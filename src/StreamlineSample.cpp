@@ -923,7 +923,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
     m_ui.DLSS_Last_AA = m_ui.AAMode;
 
-    // If we are using DLSS set its constants
+    // If we are using DLSS set its constants; changed default to ON, DLSSMode::eDLAA
     if ((m_ui.AAMode == AntiAliasingMode::DLSS && m_ui.DLSS_Mode != sl::DLSSMode::eOff))
     {
         sl::DLSSOptions dlssConstants = {};
@@ -1027,7 +1027,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
 
 #ifdef STREAMLINE_FEATURE_DLSS_RR 
-    // If we are using DLSS set its constants
+    // If we are using DLSS-RR set its constants; Default OFF
     if (m_ui.DLSSRR_Mode != sl::DLSSMode::eOff)
     {   
 
@@ -1087,11 +1087,15 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
                     nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
                     nvrhi::BindingSetItem::RayTracingAccelStruct(0, m_TopLevelAS),
                     nvrhi::BindingSetItem::Texture_SRV(1, m_RenderTargets->Depth),
+                    //nvrhi::BindingSetItem::Texture_SRV(1, hackOptions.enableHack ?
+                    //    m_RenderTargets->hackDepth : m_RenderTargets->Depth),
                     nvrhi::BindingSetItem::Texture_SRV(2, m_RenderTargets->GBufferDiffuse),
                     nvrhi::BindingSetItem::Texture_SRV(3, m_RenderTargets->GBufferSpecular),
                     nvrhi::BindingSetItem::Texture_SRV(4, m_RenderTargets->GBufferNormals),
                     nvrhi::BindingSetItem::Texture_SRV(5, m_RenderTargets->GBufferEmissive),
                     nvrhi::BindingSetItem::Texture_UAV(0, m_RenderTargets->HdrColor),
+                    //nvrhi::BindingSetItem::Texture_UAV(0, hackOptions.enableHack ?
+                    //    m_RenderTargets->hackHdrColor : m_RenderTargets->HdrColor),
                     nvrhi::BindingSetItem::Texture_UAV(1, m_RenderTargets->SpecHitDistance),
                     nvrhi::BindingSetItem::Sampler(0, m_CommonPasses->m_LinearWrapSampler)
                 };
@@ -1151,7 +1155,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     m_AmbientTop = m_ui.AmbientIntensity * m_ui.SkyParams.skyColor * m_ui.SkyParams.brightness;
     m_AmbientBottom = m_ui.AmbientIntensity * m_ui.SkyParams.groundColor * m_ui.SkyParams.brightness;
 
-    // SHADOW PASS
+    // SHADOW PASS; default ON
     if (m_ui.EnableShadows)
     {
         m_SunLight->shadowMap = m_ShadowMap;
@@ -1202,6 +1206,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
                 gbufferContext,
                 "GBufferFill");
 
+    // Earliest time to copy per-frame data to hack RT. Must come after above GBuffer render which clears all RTs.
     auto _checkLDR = m_RenderTargets->hackPreUIColor->getDesc();
     auto _checkHDR = m_RenderTargets->hackHdrColor->getDesc();
     auto _checkMV = m_RenderTargets->MotionVectors->getDesc();
@@ -1238,6 +1243,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
 
 #ifdef STREAMLINE_FEATURE_DLSS_RR
+    // Deafult On; NOTE that mvec will NOT be rendered when raytracing
     if(m_ui.RayTracing_Mode && GetDevice()->getGraphicsAPI() != nvrhi::GraphicsAPI::D3D11)
     {   
         // Set lighting constants
@@ -1265,8 +1271,9 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         if (m_ui.EnableProceduralSky)
         m_SkyPass->Render(m_CommandList, *m_View, *m_SunLight, m_ui.SkyParams);
 
-        // DO BLOOM
-        if (m_ui.EnableBloom) m_BloomPass->Render(m_CommandList, m_RenderTargets->HdrFramebuffer, *m_View, m_RenderTargets->HdrColor, m_ui.BloomSigma, m_ui.BloomAlpha);
+        // DO BLOOM; default ON
+        if (m_ui.EnableBloom) 
+            m_BloomPass->Render(m_CommandList, m_RenderTargets->HdrFramebuffer, *m_View, m_RenderTargets->HdrColor, m_ui.BloomSigma, m_ui.BloomAlpha);
 
         // Render sky (use default params)
         donut::render::SkyParameters skyParams{};
@@ -1280,7 +1287,8 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         // Deferred Shading
 
         // DO MOTION VECTORS
-        if (m_PreviousViewsValid) m_TemporalAntiAliasingPass->RenderMotionVectors(m_CommandList, *m_View, *m_ViewPrevious);
+        if (m_PreviousViewsValid) 
+            m_TemporalAntiAliasingPass->RenderMotionVectors(m_CommandList, *m_View, *m_ViewPrevious);
 
         // DO SSAO
         nvrhi::ITexture* ambientOcclusionTarget = nullptr;
@@ -1305,8 +1313,9 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     if (m_ui.EnableProceduralSky)
         m_SkyPass->Render(m_CommandList, *m_View, *m_SunLight, m_ui.SkyParams);
 
-    // DO BLOOM
-    if (m_ui.EnableBloom) m_BloomPass->Render(m_CommandList, m_RenderTargets->HdrFramebuffer, *m_View, m_RenderTargets->HdrColor, m_ui.BloomSigma, m_ui.BloomAlpha);
+    // DO BLOOM; default ON
+    if (m_ui.EnableBloom) 
+        m_BloomPass->Render(m_CommandList, m_RenderTargets->HdrFramebuffer, *m_View, m_RenderTargets->HdrColor, m_ui.BloomSigma, m_ui.BloomAlpha);
 
     // SET STREAMLINE CONSTANTS
     {
@@ -1367,7 +1376,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
 
 #ifdef STREAMLINE_FEATURE_DLSS_RR
-    // Set feature options
+    // Set feature options; DLSSRR_Mode default OFF
     if (m_ui.DLSSRR_Mode != sl::DLSSMode::eOff)
     {   
         dm::float4x4 worldToView = affineToHomogeneous(m_FirstPersonCamera.GetWorldToViewMatrix());
@@ -1383,6 +1392,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     // ANTI-ALIASING
 
     // TAG STREAMLINE RESOURCES
+    // For some reason, NIS tag will take effect even when we turn NIS off.
     if (hackOptions.enableHack) {
         NVWrapper::Get().TagResources_DLSS_NIS(m_CommandList,
             m_View->GetChildView(ViewType::PLANAR, 0),
@@ -1421,7 +1431,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
     else
     {
-        // IF YOU DO NOTHING SPECIAL -> FORWARD TEXTURE
+        // IF YOU DO NOTHING SPECIAL -> FORWARD TEXTURE from HdrColor to AAResolvedFramebuffer
         m_CommonPasses->BlitTexture(m_CommandList, m_RenderTargets->AAResolvedFramebuffer->GetFramebuffer(*m_View), m_RenderTargets->HdrColor, &m_BindingCache);
         m_PreviousViewsValid = false;
     }
@@ -1443,7 +1453,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
 #endif // STREAMLINE_FEATURE_DLSS_RR
 
-    //DO TONEMAPPING
+    //DO TONEMAPPING; changed to OFF
     nvrhi::ITexture* texToDisplay;
     if (m_ui.EnableToneMapping)
     {
@@ -1463,10 +1473,10 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
 
 
-        m_CommonPasses->BlitTexture(m_CommandList, m_RenderTargets->PreUIFramebuffer->GetFramebuffer(*m_View), texToDisplay, &m_BindingCache);
+    m_CommonPasses->BlitTexture(m_CommandList, m_RenderTargets->PreUIFramebuffer->GetFramebuffer(*m_View), texToDisplay, &m_BindingCache);
 
     //
-    // DO NIS
+    // DO NIS; default OFF
     //
     if (m_ui.NIS_Mode != sl::NISMode::eOff) {
 
@@ -1493,11 +1503,11 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         NVWrapper::Get().EvaluateNIS(m_CommandList);
     }
 
-
+    // validViewportExtent is false
     NVWrapper::Get().TagResources_DLSS_FG(m_CommandList, validViewportExtent, m_backbufferViewportExtent);
 
     //
-    // DO DEEPDVC
+    // DO DEEPDVC; default OFF
     //
     if (m_ui.DeepDVC_Mode != sl::DeepDVCMode::eOff) {
         // DeepDVC SETUP
@@ -1515,6 +1525,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
 
 #if STREAMLINE_FEATURE_LATEWARP
+    // default OFF even with LateWarp feature
     if (m_ui.Latewarp_active)
     {
         NVWrapper::Get().TagResources_Latewarp(m_CommandList,
@@ -1528,6 +1539,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
 #endif
 
+    // false
     if (validViewportExtent)
     {
         // blit to target framebuffer viewport
@@ -1549,7 +1561,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
     else
     {
-            m_CommandList->copyTexture(framebufferTexture, nvrhi::TextureSlice(), m_RenderTargets->PreUIColor, nvrhi::TextureSlice());
+        m_CommandList->copyTexture(framebufferTexture, nvrhi::TextureSlice(), m_RenderTargets->PreUIColor, nvrhi::TextureSlice());
     }
 
     // DEBUG OVERLAY
@@ -1593,6 +1605,23 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     // CLOSE COMMANDLIST
     m_CommandList->close();
     GetDevice()->executeCommandList(m_CommandList);
+
+    // EXPORT
+    if (hackOptions.enableHack && hackOptions.storeOutput && GetFrameIndex() < hackOptions.outputMaxCount) {
+        auto filePath = m_RenderTargets->hackOptions.outPath;
+        if (!std::filesystem::exists(filePath)) {
+            bool created = std::filesystem::create_directory(filePath);
+            log::warning("hack output path not exist, created success? %d", created);
+        }
+		std::string filename = "/" + hackOptions.identifier + "_" + std::to_string(GetFrameIndex()) + ".exr";
+        filePath += filename;
+        bool success = SaveHackToEXR(
+            GetDevice(),
+            m_RenderTargets->AAResolvedColor,
+            filePath.string().c_str()
+        );
+        //bool writeSuccess = TestTinyExrWrite();
+    }
 
     // CLEANUP
     {
