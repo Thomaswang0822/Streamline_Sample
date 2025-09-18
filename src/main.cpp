@@ -231,8 +231,8 @@ int main(int __argc, const char* const* __argv)
 
     donut::app::DeviceCreationParameters deviceParams;
 
-    deviceParams.backBufferWidth = 1920;
-    deviceParams.backBufferHeight = 1080;
+    deviceParams.backBufferWidth = 2560;
+    deviceParams.backBufferHeight = 1440;
     deviceParams.swapChainSampleCount = 1;
     deviceParams.swapChainBufferCount = 3;
     deviceParams.startFullscreen = false;
@@ -291,6 +291,8 @@ int main(int __argc, const char* const* __argv)
         deviceParams.requiredVulkanDeviceExtensions.push_back("VK_KHR_pipeline_library");
     }
 #endif
+
+    deviceManager->hackEnabled = hackOptions.enableHack;
 
     if (!deviceManager->CreateWindowDeviceAndSwapChain(deviceParams, windowTitle.c_str()))
     {

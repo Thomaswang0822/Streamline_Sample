@@ -229,6 +229,9 @@ namespace donut::app
     class DeviceManager
     {
     public:
+        // we only need hack ON/OFF to decide whether to allow window resize
+        bool hackEnabled;
+
         static DeviceManager* Create(nvrhi::GraphicsAPI api);
 
         bool CreateHeadlessDevice(const DeviceCreationParameters& params);
@@ -294,6 +297,11 @@ namespace donut::app
         DeviceManager();
 
         void UpdateWindowSize();
+        /**
+         * UpdateWindowSize() forces using hardware res returned by glfwGetWindowSize().
+         * Here, we use custom size to avoid auto-resize while still allow manual resize (dragging window)
+         */
+		void UpdateCustomWindowSize(int width, int height);
         bool ShouldRenderUnfocused() const;
 
         void BackBufferResizing();

@@ -728,7 +728,14 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     // RESIZE (from ui)
 
     if (m_ui.Resolution_changed) {
-        glfwSetWindowSize(GetDeviceManager()->GetWindow(), m_ui.Resolution.x, m_ui.Resolution.y);
+        // do not resize to GLFW window size if hack
+		if (hackOptions.enableHack) {
+            m_ui.Resolution.x = windowWidth;
+            m_ui.Resolution.y = windowHeight;
+        }
+        else {
+            glfwSetWindowSize(GetDeviceManager()->GetWindow(), m_ui.Resolution.x, m_ui.Resolution.y);
+        }
         m_ui.Resolution_changed = false;
     }
     else {
@@ -990,7 +997,8 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
                     // But that height might be too small or too large for the min/max settings of the DLSS
                     // mode (in theory); skip changing the res if it is out of range.
                     // We predict this never to happen. It is more of a safety measure.
-                    if (newHeight >= minSize.y && newHeight <= maxSize.y) m_RenderingRectSize = { newWidth , newHeight };
+                    if (newHeight >= minSize.y && newHeight <= maxSize.y) 
+                        m_RenderingRectSize = { newWidth , newHeight };
                 }
 
                 // For dynamic ratio, we want to choose the minimum rendering size
@@ -1059,7 +1067,8 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
 
         donut::math::int2 renderSize = useFullSizeRenderingBuffers ? m_DisplaySize : m_RenderingRectSize;
 #ifdef STREAMLINE_FEATURE_DLSS_RR
-        if(m_ui.DLSSRR_Mode != sl::DLSSMode::eOff) renderSize = {int(m_RayReconstructionSettings.optimalRenderWidth), int(m_RayReconstructionSettings.optimalRenderHeight)};
+        if(m_ui.DLSSRR_Mode != sl::DLSSMode::eOff) 
+            renderSize = {int(m_RayReconstructionSettings.optimalRenderWidth), int(m_RayReconstructionSettings.optimalRenderHeight)};
 #endif // STREAMLINE_FEATURE_DLSS_RR
 
         bool IsUpdateRequired = m_RenderTargets && m_RenderTargets->IsUpdateRequired(renderSize, m_DisplaySize);

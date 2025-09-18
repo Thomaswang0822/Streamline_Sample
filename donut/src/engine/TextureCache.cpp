@@ -577,10 +577,10 @@ bool TextureCache::hackLoadJitterFromFile(
         fileName.c_str(), r, g, b);
 
     /// Set input, output, and data size.
-        /// Input is always 1k. 
-        /// Data size = input * ratio = render resolution. E.g. when we upscale 2k render to 4k display,
-        ///     we need to "expand" 1k jitter to 2k by interpolation.
-        /// Output = render resolution * m_UpscaleRatio = display resolution. This is how big to malloc.
+    /// Input is always 1k. 
+    /// Data size = input * ratio = render resolution. E.g. when we upscale 2k render to 4k display,
+    ///     we need to "expand" 1k jitter to 2k by interpolation.
+    /// Output = render resolution * m_UpscaleRatio = display resolution. This is how big to malloc.
     const size_t imgWidth = static_cast<size_t>(image.width);
     const size_t imgHeight = static_cast<size_t>(image.height);
     assert(imgWidth == 1920 && imgHeight == 1080, L"Jitter EXR input must be 1k resolution.");

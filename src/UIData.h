@@ -95,7 +95,7 @@ public:
     float                               AmbientIntensity = .2f;
 
     // Antialising (+TAA)
-    AntiAliasingMode                                   AAMode = AntiAliasingMode::NONE;
+    AntiAliasingMode                                   AAMode = AntiAliasingMode::DLSS;
     donut::render::TemporalAntiAliasingJitter          TemporalAntiAliasingJitter = donut::render::TemporalAntiAliasingJitter::MSAA;
     donut::render::TemporalAntiAliasingParameters      TemporalAntiAliasingParams;
 
@@ -153,7 +153,7 @@ public:
     float                               DLSS_Sharpness = 0.f;
     bool                                DLSS_Supported = false;
     sl::DLSSMode                        DLSS_Mode = sl::DLSSMode::eDLAA;
-    RenderingResolutionMode             DLSS_Resolution_Mode = RenderingResolutionMode::FIXED;
+    RenderingResolutionMode             DLSS_Resolution_Mode = RenderingResolutionMode::DYNAMIC;
     bool                                DLSS_Dynamic_Res_change = true;
     AntiAliasingMode                    DLSS_Last_AA = AntiAliasingMode::NONE;
     bool                                DLSS_DebugShowFullRenderingBuffer = false;

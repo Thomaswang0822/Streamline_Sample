@@ -189,9 +189,10 @@ protected:
             for (auto i = 0; i < Resolutions_strings.size(); ++i)
             {
                 bool is_selected = i == resIndex;
-                auto is_selected_pre = i == resIndex;
-                if (ImGui::Selectable(Resolutions_strings[i].c_str(), is_selected)) resIndex = i;
-                if (is_selected) ImGui::SetItemDefaultFocus();
+                if (ImGui::Selectable(Resolutions_strings[i].c_str(), is_selected)) 
+                    resIndex = i;
+                if (is_selected) 
+                    ImGui::SetItemDefaultFocus();
             }
             ImGui::EndCombo();
         }
@@ -652,7 +653,7 @@ protected:
                 ImGui::Checkbox("Overide LOD Bias", &m_ui.DLSS_lodbias_useoveride);
                 if (m_ui.DLSS_lodbias_useoveride) {
                     ImGui::SameLine();
-                    ImGui::SliderFloat("", &m_ui.DLSS_lodbias_overide, -2, 2);
+                    ImGui::SliderFloat("##DLSS_lodbias_useoveride", &m_ui.DLSS_lodbias_overide, -2, 2);
                 }
 
             }

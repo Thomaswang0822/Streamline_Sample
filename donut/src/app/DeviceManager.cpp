@@ -334,8 +334,11 @@ bool DeviceManager::CreateWindowDeviceAndSwapChain(const DeviceCreationParameter
     {
         int fbWidth = 0, fbHeight = 0;
         glfwGetFramebufferSize(m_Window, &fbWidth, &fbHeight);
-        m_DeviceParams.backBufferWidth = fbWidth;
-        m_DeviceParams.backBufferHeight = fbHeight;
+        // do not resize to GLFW window size if hack
+        if (!hackEnabled) {
+            m_DeviceParams.backBufferWidth = fbWidth;
+            m_DeviceParams.backBufferHeight = fbHeight;
+        }
     }
 
     if (windowTitle)
@@ -377,11 +380,18 @@ bool DeviceManager::CreateWindowDeviceAndSwapChain(const DeviceCreationParameter
         glfwMaximizeWindow(m_Window);
     }
 
+    // do not resize to GLFW window size if hack
+    int origWidth = m_DeviceParams.backBufferWidth;
+	int origHeight = m_DeviceParams.backBufferHeight;
+
     // reset the back buffer size state to enforce a resize event
     m_DeviceParams.backBufferWidth = 0;
     m_DeviceParams.backBufferHeight = 0;
 
-    UpdateWindowSize();
+    if (hackEnabled)
+	    UpdateCustomWindowSize(origWidth, origHeight);
+    else
+		UpdateWindowSize();
 
     return true;
 }
@@ -509,7 +519,12 @@ void DeviceManager::RunMessageLoop()
 #endif
         if (m_callbacks.beforeFrame) m_callbacks.beforeFrame(*this, m_FrameIndex);
         glfwPollEvents();
-        UpdateWindowSize();
+
+        if (hackEnabled)
+		    UpdateCustomWindowSize(m_DeviceParams.backBufferWidth, m_DeviceParams.backBufferHeight);
+        else
+            UpdateWindowSize();
+
         bool presentSuccess = AnimateRenderPresent();
         if (!presentSuccess)
         {
@@ -640,6 +655,38 @@ void DeviceManager::UpdateWindowSize()
     m_windowIsInFocus = glfwGetWindowAttrib(m_Window, GLFW_FOCUSED) == 1;
 
     if (int(m_DeviceParams.backBufferWidth) != width || 
+        int(m_DeviceParams.backBufferHeight) != height ||
+        (m_DeviceParams.vsyncEnabled != m_RequestedVSync && GetGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN))
+    {
+        // window is not minimized, and the size has changed
+
+        BackBufferResizing();
+
+        m_DeviceParams.backBufferWidth = width;
+        m_DeviceParams.backBufferHeight = height;
+        m_DeviceParams.vsyncEnabled = m_RequestedVSync;
+
+        ResizeSwapChain();
+        BackBufferResized();
+    }
+
+    m_DeviceParams.vsyncEnabled = m_RequestedVSync;
+}
+
+void DeviceManager::UpdateCustomWindowSize(int width, int height)
+{
+    if (width == 0 || height == 0)
+    {
+        // window is minimized
+        m_windowVisible = false;
+        return;
+    }
+
+    m_windowVisible = true;
+
+    m_windowIsInFocus = glfwGetWindowAttrib(m_Window, GLFW_FOCUSED) == 1;
+
+    if (int(m_DeviceParams.backBufferWidth) != width ||
         int(m_DeviceParams.backBufferHeight) != height ||
         (m_DeviceParams.vsyncEnabled != m_RequestedVSync && GetGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN))
     {
