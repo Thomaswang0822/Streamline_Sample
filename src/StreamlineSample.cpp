@@ -838,15 +838,15 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         m_ui.DLSSG_fps = static_cast<float>(fps_multiplier * 1.0f / GetDeviceManager()->GetAverageFrameTimeSeconds());
 
         if (status != sl::DLSSGStatus::eOk) {
-            if (status == sl::DLSSGStatus::eFailResolutionTooLow)
+            if (status & sl::DLSSGStatus::eFailResolutionTooLow)
                 m_ui.DLSSG_status = "Resolution Too Low";
-            else if (status == sl::DLSSGStatus::eFailReflexNotDetectedAtRuntime)
+            else if (status & sl::DLSSGStatus::eFailReflexNotDetectedAtRuntime)
                 m_ui.DLSSG_status = "Reflex Not Detected";
-            else if (status == sl::DLSSGStatus::eFailHDRFormatNotSupported)
+            else if (status & sl::DLSSGStatus::eFailHDRFormatNotSupported)
                 m_ui.DLSSG_status = "HDR Format Not Supported";
-            else if (status == sl::DLSSGStatus::eFailCommonConstantsInvalid)
+            else if (status & sl::DLSSGStatus::eFailCommonConstantsInvalid)
                 m_ui.DLSSG_status = "Common Constants Invalid";
-            else if (status == sl::DLSSGStatus::eFailGetCurrentBackBufferIndexNotCalled)
+            else if (status & sl::DLSSGStatus::eFailGetCurrentBackBufferIndexNotCalled)
                 m_ui.DLSSG_status = "Common Constants Invalid";
             log::warning("Encountered DLSSG State Error: ", m_ui.DLSSG_status.c_str());
         }
@@ -1629,11 +1629,43 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         }
 		std::string filename = "/" + hackOptions.identifier + "_" + std::to_string(GetFrameIndex()) + ".exr";
         filePath += filename;
-        bool success = SaveHackToEXR(
-            GetDevice(),
-            m_RenderTargets->AAResolvedColor,
-            filePath.string().c_str()
-        );
+        bool success = false;
+
+        uint sourceId = 0;  // 0: AAResolvedColor, 1: PreUIColor, 2: all 3 back buffers
+        if (sourceId == 0) {
+            auto& _checkColorAttachement = m_RenderTargets->AAResolvedFramebuffer->RenderTargets;
+            success = SaveHackToEXR(
+                GetDevice(),
+                //m_RenderTargets->AAResolvedColor,
+				m_RenderTargets->AAResolvedFramebuffer->GetFramebuffer(*m_View)->getDesc().colorAttachments[0].texture,
+                filePath.string().c_str()
+            );
+        }
+        else if (sourceId == 1) {
+            success = SaveHackToEXR(
+                GetDevice(),
+                m_RenderTargets->PreUIColor,
+                filePath.string().c_str()
+            );
+        }
+        else if (sourceId == 2) {
+            auto& fbDesc = framebuffer->getDesc();
+            success = true;  // We && it with each return bool
+            for (int i = 0; i < 3; i++) {
+                filename = hackOptions.identifier + "_" + std::to_string(GetFrameIndex())
+                    + "_bb" + std::to_string(i) + ".exr";
+                auto fp = m_RenderTargets->hackOptions.outPath / filename;
+                success = success && SaveHackToEXR(
+                    GetDevice(),
+                    framebuffer->getDesc().colorAttachments[i].texture,
+                    fp.string().c_str()
+                );
+            }
+        }
+        else {
+            log::error("Wrong setting uint sourceId = %d;  // 0: AAResolvedColor, 1: PreUIColor, 2: all 3 back buffers", sourceId);
+        }
+        assert(success, "Export to EXR failed");
         //bool writeSuccess = TestTinyExrWrite();
     }
 
@@ -1650,6 +1682,9 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
 
     // CLOSE: 
+    //if (GetFrameIndex() == hackOptions.outputMaxCount)
+    //    glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);
+
     if (GetFrameIndex() == m_ScriptingConfig.maxFrames)
         glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);
 }

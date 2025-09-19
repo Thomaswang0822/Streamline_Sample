@@ -67,7 +67,7 @@ struct UIData
     bool                                EnableAnimations = true;
     float                               AnimationSpeed = 1.;
     bool                                EnableVsync = false;
-    bool                                VisualiseBuffers = true;
+    bool                                VisualiseBuffers = false;
     float                               CpuLoad = 0;
     int                                 GpuLoad = 0;
     donut::math::int2                   Resolution = { 0,0 };
@@ -156,7 +156,7 @@ public:
     RenderingResolutionMode             DLSS_Resolution_Mode = RenderingResolutionMode::FIXED;
     bool                                DLSS_Dynamic_Res_change = false;
     AntiAliasingMode                    DLSS_Last_AA = AntiAliasingMode::DLSS;
-    bool                                DLSS_DebugShowFullRenderingBuffer = false;
+    bool                                DLSS_DebugShowFullRenderingBuffer = true;
     bool                                DLSS_lodbias_useoveride = false;
     float                               DLSS_lodbias_overide = 0.f;
     bool                                DLSS_always_use_extents = false;
@@ -212,7 +212,7 @@ public:
 
     // DLFG specific parameters
     bool                                DLSSG_Supported = false;
-    sl::DLSSGMode                       DLSSG_mode = sl::DLSSGMode::eOff;
+    sl::DLSSGMode                       DLSSG_mode = sl::DLSSGMode::eOn;
     int                                 DLSSG_numFrames = 2;
     int                                 DLSSG_numFramesMaxMultiplier = 4;
     float                               DLSSG_fps = 0;

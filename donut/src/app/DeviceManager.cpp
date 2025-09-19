@@ -73,6 +73,8 @@ freely, subject to the following restrictions:
 #include <ShellScalingApi.h>
 #pragma comment(lib, "shcore.lib")
 #endif
+#include <filesystem>
+#include <donut/engine/TextureCache.h>
 
 #if defined(_WINDOWS) && DONUT_FORCE_DISCRETE_GPU
 extern "C"
@@ -478,6 +480,28 @@ void DeviceManager::Render()
     {
         it->Render(framebuffer);
     }
+
+
+    const bool storeFB = false;
+    if (!storeFB || GetFrameIndex() >= 10)
+        return;
+
+    // Look at fb for first 10 frames
+    // ONLY here can we access all 3 fb; hard-code paths for now
+    assert(m_SwapChainFramebuffers.size() == 3, "Should have 3 fb, got: %d", m_SwapChainFramebuffers.size());
+    bool success = true;  // We && it with each return bool
+    for (int i = 0; i < 3; i++) {
+        std::string filename = "/FBuffer_TEST_" + std::to_string(GetFrameIndex())
+            + "_bb" + std::to_string(i) + ".exr";
+        std::filesystem::path outPath("../media/TEST_SCENE/FBuffer_TEST" + filename);
+        success = success && donut::engine::SaveHackToEXR(
+            GetDevice(),
+            m_SwapChainFramebuffers[i]->getDesc().colorAttachments[0].texture,
+            outPath.string().c_str()
+        );
+    }
+
+	assert(success, "Failed to save out all 3 fb");
 }
 
 void DeviceManager::UpdateAverageFrameTime(double elapsedTime)

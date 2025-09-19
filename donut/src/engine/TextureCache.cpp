@@ -1378,13 +1378,27 @@ namespace donut::engine
         if (!rawData)
             return false;
 
-        // Proper reinterpretation to FP16 data
-        const uint16_t* pData = reinterpret_cast<const uint16_t*>(rawData);
+        // Proper reinterpretation depending on HDR or LDR
+        bool isHDR = false;
+        switch (desc.format)
+        {
+        case nvrhi::Format::RGBA16_FLOAT:
+            isHDR = true;
+			break;
+        case nvrhi::Format::BGRA8_UNORM:
+            break;
+        default:
+			log::error("Unsupported texture format in SaveHackToEXR() only BGRA8_UNORM and RGBA8_UNORM accepted.");
+            return false;
+        }
+
+		const uint8_t* u8Data = reinterpret_cast<const uint8_t*>(rawData);
+        const uint16_t* u16Data = reinterpret_cast<const uint16_t*>(rawData);
 
         const uint32_t width = desc.width;
         const uint32_t height = desc.height;
         const int channels = 4; // RGBA
-        const size_t bytesPerPixel = 8; // 4 channels * 2 bytes each
+        const size_t bytesPerPixel = channels * (isHDR ? 2 : 1); // 4 channels * 2 or 1 bytes each
         const size_t expectedRowPitch = width * bytesPerPixel;
         assert(rowPitchBytes == expectedRowPitch, "Expect rowPitchBytes to be %d, got %d", expectedRowPitch, rowPitchBytes);
 
@@ -1425,22 +1439,43 @@ namespace donut::engine
         }
 
         // Calculate row pitch in terms of uint16_t elements
-        const size_t rowPitchElements = rowPitchBytes / sizeof(uint16_t);
+        const size_t rowPitchElements = rowPitchBytes / (isHDR ? sizeof(uint16_t) : sizeof(uint8_t));
+
+        auto unorm8ToFP16 = [](uint8_t value) -> uint16_t {
+            tinyexr::FP32 f32; 
+            f32.f = static_cast<float>(value) / 255.0f;
+            return  tinyexr::float_to_half_full(f32).u;
+			};
 
         // Deinterleave pixel data into planar format
-        
         for (uint32_t y = 0; y < height; y++) {
-            const uint16_t* srcRow = pData + y * rowPitchElements;
+            if (isHDR) {
+                const uint16_t* srcRow = u16Data + y * rowPitchElements;
 
-            for (uint32_t x = 0; x < width; x++) {
-                const size_t dstIdx = y * width + x;
-                const size_t srcIdx = x * 4; // 4 channels per pixel
+                for (uint32_t x = 0; x < width; x++) {
+                    const size_t dstIdx = y * width + x;
+                    const size_t srcIdx = x * 4; // 4 channels per pixel
 
-                // Reverse the channel order to match EXR expectations
-                channelData[0][dstIdx] = srcRow[srcIdx + 3]; // A into R
-                channelData[1][dstIdx] = srcRow[srcIdx + 2]; // B into G
-                channelData[2][dstIdx] = srcRow[srcIdx + 1]; // G into B
-                channelData[3][dstIdx] = srcRow[srcIdx + 0]; // R into A
+                    // Reverse the channel order to match EXR expectations
+                    channelData[0][dstIdx] = srcRow[srcIdx + 3]; // A into R
+                    channelData[1][dstIdx] = srcRow[srcIdx + 2]; // B into G
+                    channelData[2][dstIdx] = srcRow[srcIdx + 1]; // G into B
+                    channelData[3][dstIdx] = srcRow[srcIdx + 0]; // R into A
+                }
+            }
+            else {
+                const uint8_t* srcRow = u8Data + y * rowPitchElements;
+
+                for (uint32_t x = 0; x < width; x++) {
+                    const size_t dstIdx = y * width + x;
+                    const size_t srcIdx = x * 4; // 4 channels per pixel
+
+                    // BGRA -> ABGR
+                    channelData[0][dstIdx] = unorm8ToFP16(srcRow[srcIdx + 3]);
+                    channelData[1][dstIdx] = unorm8ToFP16(srcRow[srcIdx + 0]);
+                    channelData[2][dstIdx] = unorm8ToFP16(srcRow[srcIdx + 1]);
+                    channelData[3][dstIdx] = unorm8ToFP16(srcRow[srcIdx + 2]);
+				}
             }
         }
 
