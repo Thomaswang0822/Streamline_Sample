@@ -67,6 +67,7 @@ freely, subject to the following restrictions:
 #if DONUT_WITH_STREAMLINE
 #include <StreamlineIntegration.h>
 #endif
+#include <stb_image_write.h>
 
 using nvrhi::RefCountPtr;
 
@@ -149,6 +150,164 @@ bool DeviceManager_DX12::CreateInstanceInternal()
     }
 
     return true;
+}
+
+void DeviceManager_DX12::CaptureSwapChainBuffers(std::filesystem::path pngPath)
+{
+    const UINT backBufferIndex = GetCurrentBackBufferIndex();
+    ID3D12Resource* swapChainResource = m_SwapChainBuffers[backBufferIndex].Get();
+    if (!swapChainResource) return;
+
+    // Get resource description
+    D3D12_RESOURCE_DESC desc = swapChainResource->GetDesc();
+    const UINT width = static_cast<UINT>(desc.Width);
+    const UINT height = desc.Height;
+    const UINT bytesPerPixel = 4; // BGRA8
+    const UINT64 rowPitch = width * bytesPerPixel;
+    const UINT64 bufferSize = rowPitch * height;
+
+    // Create staging resource
+    nvrhi::RefCountPtr<ID3D12Resource> stagingResource;
+    D3D12_HEAP_PROPERTIES heapProps = {
+        D3D12_HEAP_TYPE_READBACK,
+        D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+        D3D12_MEMORY_POOL_UNKNOWN,
+        0,
+        0
+    };
+
+    D3D12_RESOURCE_DESC stagingDesc = {
+        D3D12_RESOURCE_DIMENSION_BUFFER,
+        0,
+        bufferSize,
+        1,
+        1,
+        1,
+        DXGI_FORMAT_UNKNOWN,
+        {1, 0},
+        D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+        D3D12_RESOURCE_FLAG_NONE
+    };
+
+    HRESULT hr = m_Device12->CreateCommittedResource(
+        &heapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &stagingDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&stagingResource)
+    );
+    if (FAILED(hr)) return;
+
+    // Create command list for copy operation
+    nvrhi::RefCountPtr<ID3D12CommandAllocator> commandAllocator;
+    nvrhi::RefCountPtr<ID3D12GraphicsCommandList> commandList;
+
+    hr = m_Device12->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator));
+    if (FAILED(hr)) return;
+
+    hr = m_Device12->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator, nullptr, IID_PPV_ARGS(&commandList));
+    if (FAILED(hr)) return;
+
+    // Transition swapchain resource to COPY_SOURCE
+    D3D12_RESOURCE_BARRIER barrier = {
+        D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+        D3D12_RESOURCE_BARRIER_FLAG_NONE,
+        { swapChainResource,
+          D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+          D3D12_RESOURCE_STATE_PRESENT,         // Before
+          D3D12_RESOURCE_STATE_COPY_SOURCE }    // After
+    };
+    commandList->ResourceBarrier(1, &barrier);
+
+    // Copy to staging resource
+    D3D12_TEXTURE_COPY_LOCATION srcLocation;
+    srcLocation.pResource = swapChainResource;
+    srcLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    srcLocation.SubresourceIndex = UINT(0);
+
+    // For dst staging texture, we need the footprint
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+    UINT numRows = 0;
+    UINT64 rowSize = 0;
+    UINT64 totalBytes = 0;
+    m_Device12->GetCopyableFootprints(
+        &desc,
+        0, // Subresource index
+        1, // Number of subresources
+        0, // Offset
+        &footprint,
+        &numRows,
+        &rowSize,
+        &totalBytes
+    );
+    D3D12_TEXTURE_COPY_LOCATION dstLocation;
+	dstLocation.pResource = stagingResource;
+    dstLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dstLocation.PlacedFootprint = footprint;
+
+    commandList->CopyTextureRegion(&dstLocation, 0, 0, 0, &srcLocation, nullptr);
+
+    // Transition back to PRESENT
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+    commandList->ResourceBarrier(1, &barrier);
+
+    commandList->Close();
+
+    // Execute command list
+    ID3D12CommandList* ppCommandLists[] = { commandList };
+    m_GraphicsQueue->ExecuteCommandLists(1, ppCommandLists);
+
+    // Wait for GPU to finish
+    nvrhi::RefCountPtr<ID3D12Fence> fence;
+    hr = m_Device12->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
+    if (FAILED(hr)) return;
+
+    const UINT64 fenceValue = 1;
+    hr = m_GraphicsQueue->Signal(fence, fenceValue);
+    if (FAILED(hr)) return;
+
+    if (fence->GetCompletedValue() < fenceValue)
+    {
+        HANDLE event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+        if (event)
+        {
+            hr = fence->SetEventOnCompletion(fenceValue, event);
+            if (SUCCEEDED(hr))
+            {
+                WaitForSingleObject(event, INFINITE);
+            }
+            CloseHandle(event);
+        }
+    }
+
+    // Map staging resource and read data
+    void* pData = nullptr;
+    hr = stagingResource->Map(0, nullptr, &pData);
+    if (FAILED(hr)) return;
+
+    std::vector<uint8_t> pixelData(bufferSize);
+    memcpy(pixelData.data(), pData, bufferSize);
+    stagingResource->Unmap(0, nullptr);
+
+    // Convert BGRA to RGBA
+    for (UINT y = 0; y < height; y++) {
+        for (UINT x = 0; x < width; x++) {
+            const UINT offset = y * static_cast<UINT>(rowPitch) + x * bytesPerPixel;
+            std::swap(pixelData[offset], pixelData[offset + 2]); // Swap B and R
+        }
+    }
+
+    // Save as PNG
+    stbi_write_png(
+        pngPath.string().c_str(),
+        width,
+        height,
+        4,
+        pixelData.data(),
+        static_cast<int>(rowPitch)
+    );
 }
 
 bool DeviceManager_DX12::EnumerateAdapters(std::vector<AdapterInfo>& outAdapters)
@@ -599,7 +758,13 @@ bool DeviceManager_DX12::Present()
     if (!m_DeviceParams.vsyncEnabled && m_FullScreenDesc.Windowed && m_TearingSupported)
         presentFlags |= DXGI_PRESENT_ALLOW_TEARING;
 
+    // before we present, try to export those native ID3D12Resource m_SwapChainBuffers
+    std::filesystem::path pngPath("../media/TEST_SCENE/output_SCBuffers/");
+    pngPath += "swapchainBuffer_" + std::to_string(GetFrameIndex()) + "_frame" + std::to_string(GetCurrentBackBufferIndex()) + ".png";
+    CaptureSwapChainBuffers(pngPath);
+
     HRESULT result = m_SwapChain->Present(m_DeviceParams.vsyncEnabled ? 1 : 0, presentFlags);
+    //HRESULT result = 0l;
 
     m_FrameFence->SetEventOnCompletion(m_FrameCount, m_FrameFenceEvents[bufferIndex]);
     m_GraphicsQueue->Signal(m_FrameFence, m_FrameCount);

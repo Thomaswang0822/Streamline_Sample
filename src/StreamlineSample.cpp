@@ -1682,8 +1682,8 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
 
     // CLOSE: 
-    //if (GetFrameIndex() == hackOptions.outputMaxCount)
-    //    glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);
+    if (GetFrameIndex() == hackOptions.outputMaxCount)
+        glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);
 
     if (GetFrameIndex() == m_ScriptingConfig.maxFrames)
         glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);

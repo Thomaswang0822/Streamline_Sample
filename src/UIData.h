@@ -156,7 +156,7 @@ public:
     RenderingResolutionMode             DLSS_Resolution_Mode = RenderingResolutionMode::FIXED;
     bool                                DLSS_Dynamic_Res_change = false;
     AntiAliasingMode                    DLSS_Last_AA = AntiAliasingMode::DLSS;
-    bool                                DLSS_DebugShowFullRenderingBuffer = true;
+    bool                                DLSS_DebugShowFullRenderingBuffer = false;
     bool                                DLSS_lodbias_useoveride = false;
     float                               DLSS_lodbias_overide = 0.f;
     bool                                DLSS_always_use_extents = false;

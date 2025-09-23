@@ -308,4 +308,6 @@ namespace donut::engine
         const char* fileName);
 
     bool TestTinyExrWrite();
+
+    bool WriteDebugTexture(nvrhi::IDevice* device, nvrhi::ITexture* dest, uint8_t rgb[3]);
 }

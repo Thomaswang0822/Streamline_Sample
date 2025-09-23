@@ -481,8 +481,9 @@ void DeviceManager::Render()
         it->Render(framebuffer);
     }
 
-
-    const bool storeFB = false;
+	auto& _checkDesc = m_SwapChainFramebuffers[0]->getDesc().colorAttachments[0].texture->getDesc();
+    
+    const bool storeFB = true;
     if (!storeFB || GetFrameIndex() >= 10)
         return;
 
@@ -491,14 +492,20 @@ void DeviceManager::Render()
     assert(m_SwapChainFramebuffers.size() == 3, "Should have 3 fb, got: %d", m_SwapChainFramebuffers.size());
     bool success = true;  // We && it with each return bool
     for (int i = 0; i < 3; i++) {
-        std::string filename = "/FBuffer_TEST_" + std::to_string(GetFrameIndex())
-            + "_bb" + std::to_string(i) + ".exr";
-        std::filesystem::path outPath("../media/TEST_SCENE/FBuffer_TEST" + filename);
-        success = success && donut::engine::SaveHackToEXR(
+        //std::string filename = "/FBuffer_TEST_" + std::to_string(GetFrameIndex())
+        //    + "_bb" + std::to_string(i) + ".exr";
+        //std::filesystem::path outPath("../media/TEST_SCENE/FBuffer_TEST" + filename);
+        //success = success && donut::engine::SaveHackToEXR(
+        //    GetDevice(),
+        //    m_SwapChainFramebuffers[i]->getDesc().colorAttachments[0].texture,
+        //    outPath.string().c_str()
+        //);
+        uint8_t color[3] = {0, 0, 0};
+        color[i] = 255;
+        success = success && donut::engine::WriteDebugTexture(
             GetDevice(),
             m_SwapChainFramebuffers[i]->getDesc().colorAttachments[0].texture,
-            outPath.string().c_str()
-        );
+            color);
     }
 
 	assert(success, "Failed to save out all 3 fb");

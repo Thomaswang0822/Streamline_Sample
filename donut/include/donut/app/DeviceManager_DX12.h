@@ -32,6 +32,7 @@
 
 #include <nvrhi/d3d12.h>
 #include <nvrhi/validation.h>
+#include <filesystem>
 
 class DeviceManager_DX12 : public donut::app::DeviceManager
 {
@@ -88,6 +89,8 @@ public:
     {
         return nvrhi::GraphicsAPI::D3D12;
     }
+
+    void DeviceManager_DX12::CaptureSwapChainBuffers(std::filesystem::path pngPath);
     
 protected:
     bool CreateInstanceInternal() override;

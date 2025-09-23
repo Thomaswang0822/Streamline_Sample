@@ -1578,6 +1578,37 @@ namespace donut::engine
         return true;
     }
 
+    bool WriteDebugTexture(nvrhi::IDevice* device, nvrhi::ITexture* dest, uint8_t rgb[3])
+    {
+		const auto& desc = dest->getDesc();
+        assert(desc.format == nvrhi::Format::BGRA8_UNORM, "expect to be used on FB, which should have BGRA8_UNORM format");
+        const uint32_t width = desc.width;
+        const uint32_t height = desc.height;
+        const uint32_t rowPitch = width * 4;
+        const uint32_t depthPitch = 0u;
+
+        std::vector<uint8_t> data(width * height * 4);
+        // fill in data
+        for (size_t i = 0; i < width * height; i++)
+        {
+            data[i * 4 + 0] = rgb[2]; // B
+            data[i * 4 + 1] = rgb[1]; // G
+            data[i * 4 + 2] = rgb[0]; // R
+            data[i * 4 + 3] = 255;    // A
+		}
+
+        nvrhi::CommandListHandle commandList = device->createCommandList();
+        commandList->open();
+
+        commandList->writeTexture(dest, 0, 0,
+            static_cast<const void*>(data.data()),
+            rowPitch, depthPitch);
+
+        commandList->close();
+
+        return true;
+    }
+
     bool TextureCache::IsTextureLoaded(const std::shared_ptr<LoadedTexture>& _texture)
     {
         TextureData* texture = static_cast<TextureData*>(_texture.get());
