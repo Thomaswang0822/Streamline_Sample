@@ -759,9 +759,9 @@ bool DeviceManager_DX12::Present()
         presentFlags |= DXGI_PRESENT_ALLOW_TEARING;
 
     // before we present, try to export those native ID3D12Resource m_SwapChainBuffers
-    std::filesystem::path pngPath("../media/TEST_SCENE/output_SCBuffers/");
-    pngPath += "swapchainBuffer_" + std::to_string(GetFrameIndex()) + "_frame" + std::to_string(GetCurrentBackBufferIndex()) + ".png";
-    CaptureSwapChainBuffers(pngPath);
+    //std::filesystem::path pngPath("../media/TEST_SCENE/output_SCBuffers/");
+    //pngPath += "swapchainBuffer_" + std::to_string(GetFrameIndex()) + "_frame" + std::to_string(GetCurrentBackBufferIndex()) + ".png";
+    //CaptureSwapChainBuffers(pngPath);
 
     HRESULT result = m_SwapChain->Present(m_DeviceParams.vsyncEnabled ? 1 : 0, presentFlags);
     //HRESULT result = 0l;

@@ -164,7 +164,29 @@ StreamlineSample::StreamlineSample(
     deviceManager->m_callbacks.beforeRender  = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_RenderStart(m, f); };
     deviceManager->m_callbacks.afterRender   = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_RenderEnd(m, f); };
     deviceManager->m_callbacks.beforePresent = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_PresentStart(m, f); };
-    deviceManager->m_callbacks.afterPresent  = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_PresentEnd(m, f); };
+    deviceManager->m_callbacks.afterPresent  = [this](donut::app::DeviceManager &m, uint32_t f){
+        if (hackOptions.enableHack && GetFrameIndex() < hackOptions.outputMaxCount) {
+            HWND hWnd = glfwGetWin32Window(GetDeviceManager()->GetWindow());
+
+            // First screenshot
+            {
+                std::string filename0 = hackOptions.outPath.string() +
+                    "/frame_" + std::to_string(GetFrameIndex()) + "-screenshot_0.png";
+                GetDeviceManager()->CaptureFrontBufferScreenshot(hWnd, filename0.c_str());
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+
+            // Second screenshot
+            {
+                std::string filename1 = hackOptions.outPath.string() + 
+                    "/frame_" + std::to_string(GetFrameIndex()) + "-screenshot_1.png";
+                GetDeviceManager()->CaptureFrontBufferScreenshot(hWnd, filename1.c_str());
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+        }
+        
+        NVWrapper::Get().ReflexCallback_PresentEnd(m, f); 
+    };
 
     if (m_ScriptingConfig.Reflex_mode != -1 && NVWrapper::Get().GetReflexAvailable()) {
         static constexpr std::array<int, 3> ValidReflexIndices{ 0,1,2 };
