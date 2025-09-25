@@ -286,6 +286,11 @@ public:
      * calling LoadHackTextures() above.
      */
     static HackOptionDef parseHackOptions(int argc, const char* const* argv);
+
+    inline void turnOffUI() { 
+        m_ui.EnableUI = false; 
+        m_ui.REFLEX_Mode = static_cast<int>(sl::ReflexMode::eLowLatency);
+    }
 #pragma endregion
 
 public:

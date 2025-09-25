@@ -180,7 +180,7 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
 
     // manual change for DEBUG
     //options.enableHack = false;
-    //options.storeOutput = false;
+    options.storeOutput = false;
     return options;
 }
 
@@ -1830,7 +1830,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     m_CommandList->close();
     GetDevice()->executeCommandList(m_CommandList);
 
-    // EXPORT
+    // EXPORT: backend export disabled because it cannot capture FG frames
     if (false && hackOptions.enableHack && hackOptions.storeOutput && GetFrameIndex() < hackOptions.outputMaxCount) {
         auto filePath = hackOptions.outPath;
         if (!std::filesystem::exists(filePath)) {
@@ -1891,8 +1891,9 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         GetDeviceManager()->SetVsyncEnabled(m_ui.EnableVsync);
     }
 
-    // CLOSE: 
-    if (hackOptions.storeOutput && GetFrameIndex() == hackOptions.outputMaxCount)
+    // CLOSE: early close when we store hack output; 
+    // run several more frame to avoid strange frame sync error under fullscreen mode, which causes the system to freeze.
+    if (hackOptions.storeOutput && GetFrameIndex() == hackOptions.outputMaxCount + 5)
         glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);
 
     if (GetFrameIndex() == m_ScriptingConfig.maxFrames)

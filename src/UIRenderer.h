@@ -137,6 +137,9 @@ protected:
             return;
         }
 
+        if (m_ui.EnableUI == false)
+			return;
+
         if (m_ui.MouseOverUI) {
             ImGui::SetNextWindowBgAlpha(0.5f);
             ImGui::SetNextWindowPos(ImVec2(0.f, 0.f));
@@ -150,6 +153,7 @@ protected:
         ImGui::SetNextWindowBgAlpha(m_ui.MouseOverUI ? 0.f : 0.2f);
         ImGui::Begin("Settings", 0, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse);
 
+#pragma region GUI_CONTENT
         if (ImGui::IsAnyItemHovered() || ImGui::IsMouseHoveringRect(ImGui::GetWindowPos(), ImVec2(ImGui::GetWindowPos().x + ImGui::GetWindowSize().x, ImGui::GetWindowPos().y + ImGui::GetWindowSize().y))) {
             m_ui.MouseOverUI = true;
         }
@@ -1061,7 +1065,8 @@ protected:
             }
 
         }
-
+#pragma endregion
+        
         ImGui::End();
 
 

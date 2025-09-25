@@ -35,6 +35,7 @@
 #include <vector>
 #include <memory>
 #include <chrono>
+#include <shellscalingapi.h>
 
 #include <donut/core/vfs/VFS.h>
 #include <donut/core/log.h>
@@ -222,6 +223,7 @@ donut::app::DeviceManager* CreateDeviceManager(nvrhi::GraphicsAPI api)
 #ifdef _WIN32
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
+    SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
     nvrhi::GraphicsAPI api = donut::app::GetGraphicsAPIFromCommandLine(__argc, __argv);
 #else //  _WIN32
 int main(int __argc, const char* const* __argv)
@@ -261,6 +263,7 @@ int main(int __argc, const char* const* __argv)
     if (hackOptions.enableHack) {
         deviceParams.backBufferWidth = 3840;
         deviceParams.backBufferHeight = 2160;
+        deviceParams.startFullscreen = true;
     }
 
 #ifdef _DEBUG
@@ -338,11 +341,11 @@ int main(int __argc, const char* const* __argv)
         gui->Init(pApp->GetShaderFactory());
 
         assert(pApp->getViewportCount() > 0, "No valid viewport");
-        pApp->getASample()->hackOptions = hackOptions;
+        auto slSample = pApp->getASample();
+        slSample->hackOptions = hackOptions;
         // load data before the main loop
         if (hackOptions.enableHack) {
-            
-            auto slSample = pApp->getASample();
+            slSample->turnOffUI();
             auto texCache = slSample->GetTextureCache();
             assert(slSample->LoadHackTextures(texCache), "load hack texture data failed");
         }

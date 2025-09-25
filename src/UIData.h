@@ -81,6 +81,9 @@ private:
     std::vector<sl::Extent>             BackBufferExtents{};
 public:
 
+    // global switch
+	bool								EnableUI = true;
+
     // SSAO
     bool                                EnableSsao = true;
     donut::render::SsaoParameters       SsaoParams;
