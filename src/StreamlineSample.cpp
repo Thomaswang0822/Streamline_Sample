@@ -56,6 +56,134 @@ using namespace donut::engine;
 using namespace donut::render;
 using namespace donut::render;
 
+StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, const char* const* argv)
+{
+    HackOptionDef options;
+    // Skip argv[0] and convert to modern format
+    std::vector<std::string> argList(argv + 1, argv + argc);  
+
+    // counter to sanity check hackPaths, result written to options.frameCount 
+    auto count_exr_files = [](const std::filesystem::path& folderPath) {
+        return std::count_if(std::filesystem::directory_iterator(folderPath), std::filesystem::directory_iterator{}, [](const auto& entry) {
+            return entry.path().extension() == ".exr";
+        });
+    };
+
+    // parse other options only when global switch "-EnableHack" is set
+    bool         hackMode = false;
+    for (size_t currentArg = 0; currentArg < argList.size(); currentArg++)
+    {
+        std::string command = argList[currentArg];
+        if (command == "-EnableHack")
+        {
+            // we reset HackOptions otherwise bool fields can't be overwritten to false
+            hackMode = true;
+            options.enableHack = true;
+            continue;
+        }
+        if (hackMode && command == "-Identifier")
+        {
+            // We require at least 1 argument
+            assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != '-',
+                "-Identifier requires a input to be provided (usage: -Identifier <input>");
+            options.identifier = argList[currentArg + 1];
+            currentArg++;
+            continue;
+        }
+        if (hackMode && command == "-RenderResolution")
+        {
+            // We require at least 1 argument
+            assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
+                "-RenderResolution requires a input to be provided (usage: -RenderResolution <1 or 2 or 4>");
+            int resOption = std::stoi(argList[currentArg + 1]);
+            assert(resOption == 1 || resOption == 2 || resOption == 4,
+                L"usage: -RenderResolution <1 or 2 or 4>, got %d", resOption);
+            options.renderResolution = static_cast<HackOptionDef::HackRenderResolution>(resOption);
+
+            currentArg++;
+            continue;
+        }
+        if (hackMode && command == "-ParseJitter")
+        {
+            options.parseJitter = true;
+            continue;
+        }
+        if (hackMode && command == "-HackPaths")
+        {
+            // We require at least 1 argument
+            assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
+                "-HackPaths requires a input to be provided (usage: -HackPaths <input>");
+
+            // store 3 paths: default NPP_JI, NPP_GT, MVD_JI
+            options.hackPaths.push_back(std::filesystem::path(argList[currentArg + 1]));
+            const auto nTargets = count_exr_files(std::filesystem::path(options.hackPaths[0]));
+
+            // path += string works but path + string does not.
+            auto gtPath = options.hackPaths.front().parent_path() += "/NPP_GT";
+            assert(std::filesystem::exists(gtPath), "4k ground truth exr files must be stored in %s", gtPath.c_str());
+            options.hackPaths.push_back(gtPath);
+            const auto gtCount = count_exr_files(std::filesystem::path(options.hackPaths[1]));
+
+            auto jitterPath = options.hackPaths.front().parent_path() += "/MVD_JI";
+            assert(std::filesystem::exists(jitterPath), "Encoded MVs and Depths exr files must be stored in %s", jitterPath.c_str());
+            options.hackPaths.push_back(jitterPath);
+            const auto jitterCount = count_exr_files(std::filesystem::path(options.hackPaths[2]));
+
+            assert(nTargets == gtCount && nTargets == jitterCount,
+                "frame capture count and jitter count of (%s) (%s) (%s) should match, but got %d, %d, and %d",
+                options.hackPaths[0].c_str(), options.hackPaths[1].c_str(), options.hackPaths[2].c_str(),
+                nTargets, gtCount, jitterCount);
+
+            // IMPORTANT: internal member frameCount can ONLY be set here.
+            options.frameCount = static_cast<size_t>(nTargets);
+
+            currentArg++;
+            continue;
+        }
+        if (hackMode && command == "-StoreOutput")
+        {
+            options.storeOutput = true;
+            continue;
+        }
+        if (hackMode && command == "-OutputMaxCount")
+        {
+            // We require at least 1 argument
+            assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
+                "-OutputMaxCount requires a input to be provided (usage: -OutputMaxCount <input>");
+
+            options.outputMaxCount = std::stoull(argList[currentArg + 1]);  // size_t is u long long
+
+            currentArg++;
+            continue;
+        }
+
+        if (hackMode && command == "-OutputPath")
+        {
+            // We require at least 1 argument
+            assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
+                L"-OutputPath requires a input to be provided (usage: -OutputPath <input>");
+            options.outPath = std::filesystem::path(argList[currentArg + 1]);
+            currentArg++;
+            continue;
+        }
+    }
+
+    /// Better logic: handle tricky dependency of outputMaxCount on frameCount after parsing all args.
+    /// Tricky because -OutputMaxCount is optional, and when it's given, it can come 
+	/// before or after -HackPaths, and it can exceed frameCount given by counting number of input exr files.
+    assert(options.frameCount > 0, "hackOptions.frameCount is not set because -HackPaths <PATH> is missing or has wrong format.");
+    if (options.outputMaxCount == 0 || /* not given */
+        options.outputMaxCount > options.frameCount /* or too big */)
+    {
+		options.outputMaxCount = options.frameCount;
+    }
+
+    // manual change for DEBUG
+    //options.enableHack = false;
+    //options.storeOutput = false;
+    return options;
+}
+
 // Constructor
 StreamlineSample::StreamlineSample(
     DeviceManager* deviceManager,
@@ -165,14 +293,15 @@ StreamlineSample::StreamlineSample(
     deviceManager->m_callbacks.afterRender   = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_RenderEnd(m, f); };
     deviceManager->m_callbacks.beforePresent = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_PresentStart(m, f); };
     deviceManager->m_callbacks.afterPresent  = [this](donut::app::DeviceManager &m, uint32_t f){
-        if (hackOptions.enableHack && GetFrameIndex() < hackOptions.outputMaxCount) {
-            HWND hWnd = glfwGetWin32Window(GetDeviceManager()->GetWindow());
+        const int PresentInterval = 10;
+        if (hackOptions.enableHack && hackOptions.storeOutput && GetFrameIndex() < hackOptions.outputMaxCount) {
+            HWND hWnd = glfwGetWin32Window(m.GetWindow());
 
             // First screenshot
             {
                 std::string filename0 = hackOptions.outPath.string() +
                     "/frame_" + std::to_string(GetFrameIndex()) + "-screenshot_0.png";
-                GetDeviceManager()->CaptureFrontBufferScreenshot(hWnd, filename0.c_str());
+                m.CaptureFrontBufferScreenshot(hWnd, filename0.c_str());
             }
             std::this_thread::sleep_for(std::chrono::seconds(5));
 
@@ -180,7 +309,7 @@ StreamlineSample::StreamlineSample(
             {
                 std::string filename1 = hackOptions.outPath.string() + 
                     "/frame_" + std::to_string(GetFrameIndex()) + "-screenshot_1.png";
-                GetDeviceManager()->CaptureFrontBufferScreenshot(hWnd, filename1.c_str());
+                m.CaptureFrontBufferScreenshot(hWnd, filename1.c_str());
             }
             std::this_thread::sleep_for(std::chrono::seconds(5));
         }
@@ -255,6 +384,68 @@ StreamlineSample::~StreamlineSample()
     #if STREAMLINE_FEATURE_LATEWARP
     NVWrapper::Get().CleanupLatewarp(true);
 #endif
+}
+
+bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache)
+{
+    typedef donut::engine::TextureCache::HackDataType hackDataType;
+
+    auto loadFrameCaptures = [&]
+    (const std::filesystem::path& hackPath, hackDataType dtype)
+        -> std::vector<std::filesystem::path>
+        {
+            std::vector<std::filesystem::path> filePaths;
+            bool shouldParseJitter = dtype == hackDataType::COLOR_HDR && hackOptions.parseJitter;
+            size_t nFiles = textureCache->TraverseFolderPath(
+                hackPath, filePaths, shouldParseJitter, hackLoadedJitterOffsets, ".exr");
+            // double check
+            assert(nFiles == hackOptions.frameCount,
+                "#input files counted by TraverseFolder() (%d) and lambda function in parser (%d) don't match.",
+                nTextures,
+                hackOptions.frameCount);
+
+
+            if (nFiles < hackOptions.outputMaxCount) {
+                log::error("Expect to run %d frames more than %s frame captures: %d",
+                    hackOptions.outputMaxCount, hackPath.generic_string(), nFiles);
+            }
+
+            // we may want to run only 5 frames even there are 60 in the folder
+            for (size_t frameIdx = 0; frameIdx < hackOptions.outputMaxCount; ++frameIdx) {
+                auto& filePath = filePaths[frameIdx];
+
+                std::shared_ptr<donut::engine::TextureData> loadedTexture =
+                    textureCache->hackLoadTextureFromFile(filePath, dtype);
+
+                switch (dtype)
+                {
+                case hackDataType::COLOR_LDR:
+                    hackLoadedColorsLDR.push_back(loadedTexture);
+                    break;
+                case hackDataType::COLOR_HDR:
+                    hackLoadedColorsHDR.push_back(loadedTexture);
+                    break;
+                case hackDataType::MOTION_VECTORS:
+                    hackLoadedMVs.push_back(loadedTexture);
+                    break;
+                case hackDataType::GBUFFER_DEPTH:
+                    hackLoadedDepths.push_back(loadedTexture);
+                    break;
+                default:
+                    log::error("Unsupported hackDataType %d", static_cast<int>(dtype));
+                    break;
+                }
+            }
+
+            return filePaths;
+        };
+
+    auto exrFiles = loadFrameCaptures(hackOptions.hackPaths[0], hackDataType::COLOR_HDR);
+    auto pngFiles = loadFrameCaptures(hackOptions.hackPaths[1], hackDataType::COLOR_LDR);
+    auto mvFiles = loadFrameCaptures(hackOptions.hackPaths[2], hackDataType::MOTION_VECTORS);
+    auto depthFiles = loadFrameCaptures(hackOptions.hackPaths[2], hackDataType::GBUFFER_DEPTH);
+
+    return true;
 }
 
 void StreamlineSample::SetLatewarpOptions()
@@ -1106,14 +1297,11 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
             m_RenderTargets = std::make_unique<RenderTargets>();
             m_RenderTargets->Init(GetDevice(), renderSize, m_DisplaySize, framebuffer->getDesc().colorAttachments[0].texture->getDesc().format);
 
-            // copy app-scope hack options to RT-scope
-            m_RenderTargets->setHackOptions(hackOptions);
-
             // Load hack data
-            if (hackOptions.enableHack) {
-                std::shared_ptr<TextureCache> texCache = GetTextureCache();
-                assert(m_RenderTargets->LoadHackTextures(texCache), "load hack texture data failed");
-            }
+            //if (hackOptions.enableHack) {
+            //    std::shared_ptr<TextureCache> texCache = GetTextureCache();
+            //    assert(LoadHackTextures(texCache), "load hack texture data failed");
+            //}
 
 #ifdef STREAMLINE_FEATURE_DLSS_RR
             if(GetDevice()->getGraphicsAPI() != nvrhi::GraphicsAPI::D3D11)
@@ -1246,29 +1434,29 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     auto _checkLDR = m_RenderTargets->hackPreUIColor->getDesc();
     auto _checkHDR = m_RenderTargets->hackHdrColor->getDesc();
     auto _checkMV = m_RenderTargets->MotionVectors->getDesc();
-    const auto& _checkJitter = m_RenderTargets->hackLoadedJitterOffsets;
+    const auto& _checkJitter = hackLoadedJitterOffsets;
     auto descHackMV = m_RenderTargets->hackMotionVectors->getDesc();
     auto descDepth = m_RenderTargets->Depth->getDesc();
     if (hackOptions.enableHack) {
         uint32_t hackFrameId = GetFrameIndex() % hackOptions.outputMaxCount;
-        const TextureSubresourceData& layoutLDR = m_RenderTargets->hackLoadedColorsLDR[hackFrameId]->dataLayout[0][0];
+        const TextureSubresourceData& layoutLDR = hackLoadedColorsLDR[hackFrameId]->dataLayout[0][0];
         m_CommandList->writeTexture(m_RenderTargets->hackPreUIColor, 0, 0,
-            static_cast<const void*>(m_RenderTargets->hackLoadedColorsLDR[hackFrameId]->data->data()),
+            static_cast<const void*>(hackLoadedColorsLDR[hackFrameId]->data->data()),
             layoutLDR.rowPitch, layoutLDR.depthPitch);
 
-        const TextureSubresourceData& layoutHDR = m_RenderTargets->hackLoadedColorsHDR[hackFrameId]->dataLayout[0][0];
+        const TextureSubresourceData& layoutHDR = hackLoadedColorsHDR[hackFrameId]->dataLayout[0][0];
         m_CommandList->writeTexture(m_RenderTargets->hackHdrColor, 0, 0,
-            static_cast<const void*>(m_RenderTargets->hackLoadedColorsHDR[hackFrameId]->data->data()),
+            static_cast<const void*>(hackLoadedColorsHDR[hackFrameId]->data->data()),
             layoutHDR.rowPitch, layoutHDR.depthPitch);
 
-        const TextureSubresourceData& layoutMV = m_RenderTargets->hackLoadedMVs[hackFrameId]->dataLayout[0][0];
+        const TextureSubresourceData& layoutMV = hackLoadedMVs[hackFrameId]->dataLayout[0][0];
         m_CommandList->writeTexture(m_RenderTargets->hackMotionVectors, 0, 0,
-            static_cast<const void*>(m_RenderTargets->hackLoadedMVs[hackFrameId]->data->data()),
+            static_cast<const void*>(hackLoadedMVs[hackFrameId]->data->data()),
             layoutMV.rowPitch, layoutMV.depthPitch);
 
-        const TextureSubresourceData& layoutDepth = m_RenderTargets->hackLoadedDepths[hackFrameId]->dataLayout[0][0];
+        const TextureSubresourceData& layoutDepth = hackLoadedDepths[hackFrameId]->dataLayout[0][0];
         m_CommandList->writeTexture(m_RenderTargets->hackDepth, 0, 0,
-            static_cast<const void*>(m_RenderTargets->hackLoadedDepths[hackFrameId]->data->data()),
+            static_cast<const void*>(hackLoadedDepths[hackFrameId]->data->data()),
             layoutDepth.rowPitch, layoutDepth.depthPitch);
 
         // MV and depth need to restore resources state after copy; probably because they are not virtual textures
@@ -1366,7 +1554,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         float4x4 projection = perspProjD3DStyleReverse(dm::radians(m_CameraVerticalFov), aspectRatio, zNear);
 
         float2 jitterOffset = hackOptions.enableHack ?
-            m_RenderTargets->hackLoadedJitterOffsets[GetFrameIndex() % hackOptions.outputMaxCount] :
+            hackLoadedJitterOffsets[GetFrameIndex() % hackOptions.outputMaxCount] :
             std::dynamic_pointer_cast<PlanarView, IView>(m_View)->GetPixelOffset();
 
         sl::Constants slConstants = {};
@@ -1643,8 +1831,8 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     GetDevice()->executeCommandList(m_CommandList);
 
     // EXPORT
-    if (hackOptions.enableHack && hackOptions.storeOutput && GetFrameIndex() < hackOptions.outputMaxCount) {
-        auto filePath = m_RenderTargets->hackOptions.outPath;
+    if (false && hackOptions.enableHack && hackOptions.storeOutput && GetFrameIndex() < hackOptions.outputMaxCount) {
+        auto filePath = hackOptions.outPath;
         if (!std::filesystem::exists(filePath)) {
             bool created = std::filesystem::create_directory(filePath);
             log::warning("hack output path not exist, created success? %d", created);
@@ -1676,7 +1864,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
             for (int i = 0; i < 3; i++) {
                 filename = hackOptions.identifier + "_" + std::to_string(GetFrameIndex())
                     + "_bb" + std::to_string(i) + ".exr";
-                auto fp = m_RenderTargets->hackOptions.outPath / filename;
+                auto fp = hackOptions.outPath / filename;
                 success = success && SaveHackToEXR(
                     GetDevice(),
                     framebuffer->getDesc().colorAttachments[i].texture,
@@ -1704,7 +1892,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
 
     // CLOSE: 
-    if (GetFrameIndex() == hackOptions.outputMaxCount)
+    if (hackOptions.storeOutput && GetFrameIndex() == hackOptions.outputMaxCount)
         glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);
 
     if (GetFrameIndex() == m_ScriptingConfig.maxFrames)

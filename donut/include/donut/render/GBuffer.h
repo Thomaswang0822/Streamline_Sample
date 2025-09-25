@@ -52,26 +52,6 @@ namespace donut::render
         nvrhi::TextureHandle MotionVectors;
 
 #pragma region HACK
-        // general runtime options
-        struct HackOptionDef
-        {
-            bool enableHack = false;
-            std::string identifier = "";
-            enum class HackRenderResolution
-            {
-                RR_1K = 1,
-                RR_2K = 2,
-                RR_4K = 4
-            } renderResolution = HackRenderResolution::RR_1K;
-            bool parseJitter = false;
-            std::vector<std::filesystem::path>  hackPaths = {};
-            bool storeOutput = false;
-            size_t outputMaxCount = 0;
-            std::filesystem::path outPath = "";
-
-            // internal, should not be set directly. Set by counting exr files in hackPaths
-            size_t frameCount = 0;
-        } hackOptions;
         // render targets
         nvrhi::TextureHandle hackMotionVectors;
         nvrhi::TextureHandle hackDepth;

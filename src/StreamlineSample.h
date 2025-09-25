@@ -249,8 +249,44 @@ private:
     donut::math::int2                               m_DLSSRR_Last_DisplaySize = { 0,0 };
 
 public:
-    // Hack runtime options
-    RenderTargets::HackOptionDef                    hackOptions;
+
+#pragma region Hack
+    // general runtime options
+    struct HackOptionDef
+    {
+        bool enableHack = false;
+        std::string identifier = "";
+        enum class HackRenderResolution
+        {
+            RR_1K = 1,
+            RR_2K = 2,
+            RR_4K = 4
+        } renderResolution = HackRenderResolution::RR_1K;
+        bool parseJitter = false;
+        std::vector<std::filesystem::path>  hackPaths = {};
+        bool storeOutput = false;
+        size_t outputMaxCount = 0;
+        std::filesystem::path outPath = "";
+
+        // internal, should not be set directly. Set by counting exr files in hackPaths
+        size_t frameCount = 0;
+    } hackOptions;
+    // read-only data storage to copy from; copy dst are RTs defined in RenderTargets.h and GBuffer.h
+    std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedColorsLDR;
+    std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedColorsHDR;
+    std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedMVs;
+    std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedDepths;
+    std::vector<donut::math::float2> hackLoadedJitterOffsets;
+
+    bool LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache);
+
+    /**
+     * Will be called in App scope BEFORE any StreamlineSample instance is created.
+     * That global option will be manually copied to the instance right before 
+     * calling LoadHackTextures() above.
+     */
+    static HackOptionDef parseHackOptions(int argc, const char* const* argv);
+#pragma endregion
 
 public:
     StreamlineSample(DeviceManager* deviceManager, sl::ViewportHandle vpHandle, UIData& ui, const std::string& sceneName, ScriptingConfig scriptingConfig);
@@ -356,12 +392,7 @@ struct MultiViewportApp : public ApplicationBase
         return true; 
     }
 
-    inline void setAppHackOptions(const RenderTargets::HackOptionDef& options) {
-        assert(m_pViewports.size() > 0, "setAppHackOptions() should be called after populating m_pViewports");
-        for (auto& vp : m_pViewports) {
-            vp->m_pSample->hackOptions = options;
-        }
-    }
+	inline size_t getViewportCount() const { return m_pViewports.size(); }
 
 private:
     typedef ApplicationBase Super;

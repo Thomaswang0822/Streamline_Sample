@@ -257,7 +257,7 @@ int main(int __argc, const char* const* __argv)
     }
 
     auto scripting = ScriptingConfig(__argc, __argv);
-    auto hackOptions = RenderTargets::parseHackOptions(__argc, __argv);
+    auto hackOptions = StreamlineSample::parseHackOptions(__argc, __argv);
     if (hackOptions.enableHack) {
         deviceParams.backBufferWidth = 3840;
         deviceParams.backBufferHeight = 2160;
@@ -337,7 +337,16 @@ int main(int __argc, const char* const* __argv)
 
         gui->Init(pApp->GetShaderFactory());
 
-        pApp->setAppHackOptions(hackOptions);
+        assert(pApp->getViewportCount() > 0, "No valid viewport");
+        pApp->getASample()->hackOptions = hackOptions;
+        // load data before the main loop
+        if (hackOptions.enableHack) {
+            
+            auto slSample = pApp->getASample();
+            auto texCache = slSample->GetTextureCache();
+            assert(slSample->LoadHackTextures(texCache), "load hack texture data failed");
+        }
+
 
         deviceManager->AddRenderPassToBack(pApp.get());
         deviceManager->AddRenderPassToBack(gui.get());
