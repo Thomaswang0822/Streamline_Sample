@@ -307,6 +307,9 @@ namespace donut::engine
         nvrhi::ITexture* texture,
         const char* fileName);
 
+    [[deprecated("UNDER ACTIVE DEVELOPMENT - DO NOT USE")]]
+    bool SaveCaptureDataToEXR(const uint32_t* bgraData, const char* fileName, const uint32_t width, const uint32_t height);
+
     bool TestTinyExrWrite();
 
     bool WriteDebugTexture(nvrhi::IDevice* device, nvrhi::ITexture* dest, uint8_t rgb[3]);

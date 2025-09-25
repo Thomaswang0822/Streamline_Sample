@@ -270,6 +270,15 @@ public:
 
         // internal, should not be set directly. Set by counting exr files in hackPaths
         size_t frameCount = 0;
+        // internal, each Present Callback should take 2 * StoreDelay seconds, and Present() will evenly 
+        // space the display time of rendered frame and FG frame to StoreDelay
+        const static int64_t StoreDelayMS = 2500;
+        /// internal, without it, captured frames are:
+        /// 0A: Visual Studio (renderer window not opened yet); 0B: Frame 0
+        /// 1A: Frame 0; 1B: Frame 1;
+        /// 2A: Frame 1; 2B: Frame 1; (This is weird)
+        /// 3A: Frame 2; 3B: Frame 2.5 (FG frame)
+        const static uint32_t numSkippedFrames = 3;
     } hackOptions;
     // read-only data storage to copy from; copy dst are RTs defined in RenderTargets.h and GBuffer.h
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedColorsLDR;
@@ -291,6 +300,8 @@ public:
         m_ui.EnableUI = false; 
         m_ui.REFLEX_Mode = static_cast<int>(sl::ReflexMode::eLowLatency);
     }
+
+    void CaptureScreenshotSync(HWND hWnd, std::string filename, const int64_t StoreDelayMS);
 #pragma endregion
 
 public:

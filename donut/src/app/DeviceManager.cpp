@@ -73,11 +73,7 @@ freely, subject to the following restrictions:
 #include <ShellScalingApi.h>
 #pragma comment(lib, "shcore.lib")
 #endif
-#include <filesystem>
 #include <donut/engine/TextureCache.h>
-#include <stb_image_write.h>
-#include <iostream>
-#include <fstream>
 
 #if defined(_WINDOWS) && DONUT_FORCE_DISCRETE_GPU
 extern "C"
@@ -537,90 +533,6 @@ bool DeviceManager::ShouldRenderUnfocused() const
     }
 
     return false;
-}
-
-void DeviceManager::CaptureFrontBufferScreenshot(HWND hWnd, const char* filename) {
-    // Get window dimensions with DPI awareness
-    RECT rect;
-    GetClientRect(hWnd, &rect);
-    int width = rect.right - rect.left;
-    int height = rect.bottom - rect.top;
-
-    // Get actual screen coordinates
-    POINT pt = { 0, 0 };
-    ClientToScreen(hWnd, &pt);
-    RECT screenRect = { pt.x, pt.y, pt.x + width, pt.y + height };
-
-    // Create device contexts
-    HDC hdcScreen = GetDC(nullptr); // Use screen DC instead of window DC
-    HDC hdcMem = CreateCompatibleDC(hdcScreen);
-
-    // Create 32-bit bitmap (matches most displays)
-    BITMAPINFO bmi = { 0 };
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = width;
-    bmi.bmiHeader.biHeight = -height; // Top-down
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    uint32_t* pPixels = nullptr;
-    HBITMAP hBitmap = CreateDIBSection(hdcMem, (BITMAPINFO*)&bmi, 
-        DIB_RGB_COLORS, (void**)&pPixels, nullptr, 0);
-
-    if (!hBitmap) {
-        ReleaseDC(nullptr, hdcScreen);
-        return;
-    }
-
-    SelectObject(hdcMem, hBitmap);
-
-    // Capture with diagnostic
-    BOOL captureSuccess = BitBlt(hdcMem, 0, 0, width, height, hdcScreen, 0, 0, SRCCOPY);
-    if (!captureSuccess) {
-        DWORD err = GetLastError();
-        std::cerr << "BitBlt failed: " << err << std::endl;
-    }
-    // Capture using PrintWindow instead of BitBlt
-    //BOOL captureSuccess = PrintWindow(hWnd, hdcMem, PW_CLIENTONLY);
-    //if (!captureSuccess) {
-    //    DWORD err = GetLastError();
-    //    std::cerr << "PrintWindow failed with error: " << err << std::endl;
-    //}
-
-    // Get bitmap data directly from DIB section
-    const int pixelCount = width * height;
-    std::vector<uint8_t> pixels(width * height * 3);
-
-    // Convert BGRA to RGB
-    for (int i = 0; i < pixelCount; i++) {
-        pixels[i * 3 + 0] = static_cast<uint8_t>((pPixels[i] >> 16) & 0xFF); // R
-        pixels[i * 3 + 1] = static_cast<uint8_t>((pPixels[i] >> 8) & 0xFF);  // G
-        pixels[i * 3 + 2] = static_cast<uint8_t>(pPixels[i] & 0xFF);         // B
-    }
-
-    // Save as PNG
-    stbi_write_png(filename, width, height, 3, pixels.data(), width * 3);
-
-    //// Diagnostic: Save raw bitmap data for debugging
-    //std::string rawFilename = std::string(filename) + ".raw";
-    //std::ofstream rawFile(rawFilename, std::ios::binary);
-    //if (rawFile) {
-    //    rawFile.write(reinterpret_cast<const char*>(pPixels), pixelCount * 4);
-    //}
-    //else {
-    //    std::cerr << "Failed to open raw file: " << rawFilename << std::endl;
-    //}
-
-    // Cleanup
-    DeleteObject(hBitmap);
-    DeleteDC(hdcMem);
-    ReleaseDC(nullptr, hdcScreen);
-
-    //// Diagnostic output
-    //std::cout << "Capture status: " << (captureSuccess ? "Success" : "Failed")
-    //    << "\nSaved to: " << filename
-    //    << "\nRaw data: " << rawFilename << std::endl;
 }
 
 void DeviceManager::RunMessageLoop()

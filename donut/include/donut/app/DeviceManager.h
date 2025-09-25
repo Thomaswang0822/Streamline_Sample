@@ -372,8 +372,6 @@ namespace donut::app
         virtual void GetEnabledVulkanDeviceExtensions(std::vector<std::string>& extensions) const { }
         virtual void GetEnabledVulkanLayers(std::vector<std::string>& layers) const { }
 
-        void CaptureFrontBufferScreenshot(HWND hWnd, const char* filename);
-
         // GetFrameIndex cannot be used inside of these callbacks, hence the additional passing of frameID
         // Refer to AnimateRenderPresent implementation for more details
         struct PipelineCallbacks {

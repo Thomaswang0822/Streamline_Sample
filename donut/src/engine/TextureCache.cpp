@@ -1501,6 +1501,91 @@ namespace donut::engine
         return success;
     }
 
+    bool SaveCaptureDataToEXR(const uint32_t* bgraData, const char* fileName, const uint32_t width, const uint32_t height)
+    {
+        assert(false, "SaveCaptureDataToEXR() is not ready for use");
+
+        constexpr int channels = 3; // RGB
+        EXRHeader header;
+        InitEXRHeader(&header);
+        EXRImage exrImage;
+        InitEXRImage(&exrImage);
+
+        // Configure EXR header
+        header.num_channels = channels;
+        header.channels = new EXRChannelInfo[header.num_channels];
+        header.pixel_types = new int[header.num_channels];
+        header.requested_pixel_types = new int[header.num_channels];
+
+        /// The texture stores data in RGBA order, but TEV open it as ABGR (alphetical order).
+        //const char channel_names[] = { 'R', 'G', 'B', 'A' };
+        const char channel_names[channels] = { 'B', 'G', 'R' };
+        for (int i = 0; i < header.num_channels; i++) {
+            //strncpy(header.channels[i].name, channel_names[i], 255);
+            header.channels[i].name[0] = channel_names[i];
+            header.channels[i].name[1] = '\0';
+            header.pixel_types[i] = TINYEXR_PIXELTYPE_HALF;
+            header.requested_pixel_types[i] = TINYEXR_PIXELTYPE_HALF;
+        }
+
+        header.compression_type = TINYEXR_COMPRESSIONTYPE_NONE;
+
+        // Configure EXR image
+        exrImage.num_channels = channels;
+        exrImage.width = width;
+        exrImage.height = height;
+
+        // Allocate planar arrays for RGBA channels
+        std::vector<std::vector<uint16_t>> channelData(header.num_channels);
+        for (auto& channel : channelData) {
+            channel.resize(width * height);
+        }
+
+        // helper lambda: UNORM8 to LDR FP16 represented by uint16_t
+        auto unorm8ToFP16 = [](uint8_t value) -> uint16_t {
+            tinyexr::FP32 f32;
+            /// Reinhard tonemapping: ldr = hdr / (hdr + 1.0) = 1.0 - 1.0 / (hdr + 1.0)
+			/// => hdr = 1.0 / (1.0 - ldr) - 1.0 = ldr / (1.0 - ldr)
+            float ldr = static_cast<float>(value) / 255.0f;
+			//f32.f = ldr / (1.0f - ldr + 1e-6f); // avoid div-by-zero
+            f32.f = ldr;
+            return  tinyexr::float_to_half_full(f32).u;
+            };
+
+        // Deinterleave pixel data into planar format
+        for (uint32_t y = 0; y < height; y++) {
+            for (uint32_t x = 0; x < width; x++) {
+                size_t index = static_cast<size_t>(y) * width + x;
+                uint32_t pixel = bgraData[index];
+
+                // Extract components: BGRA on little-endian (Windows) is 0xAARRGGBB
+                channelData[0][index] = unorm8ToFP16((pixel >> 0) & 0xFF);
+                channelData[1][index] = unorm8ToFP16((pixel >> 8) & 0xFF);
+                channelData[2][index] = unorm8ToFP16((pixel >> 16) & 0xFF);
+            }
+        }
+
+        // Prepare channel pointers for EXR
+        std::vector<unsigned char*> imagePtrs(channels);
+        for (int i = 0; i < header.num_channels; i++) {
+            imagePtrs[i] = reinterpret_cast<unsigned char*>(channelData[i].data());
+        }
+        exrImage.images = imagePtrs.data();
+
+        // Save EXR file
+        const char* err = nullptr;
+        int ret = SaveEXRImageToFile(&exrImage, &header, fileName, &err);
+        bool success = (ret == TINYEXR_SUCCESS);
+
+        // Cleanup
+        delete[] header.channels;
+        delete[] header.pixel_types;
+        delete[] header.requested_pixel_types;
+
+        return success;
+
+    }
+
     bool TestTinyExrWrite()
     {
         EXRHeader header;

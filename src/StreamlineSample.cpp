@@ -35,6 +35,7 @@
 #include "StreamlineSample.h"
 #include <sstream>
 #include <thread>
+#include <stb_image_write.h>
 
 #ifdef STREAMLINE_FEATURE_DLSS_RR
 #include "lighting_cb.h"
@@ -180,7 +181,7 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
 
     // manual change for DEBUG
     //options.enableHack = false;
-    options.storeOutput = false;
+    //options.storeOutput = false;
     return options;
 }
 
@@ -292,29 +293,21 @@ StreamlineSample::StreamlineSample(
     deviceManager->m_callbacks.beforeRender  = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_RenderStart(m, f); };
     deviceManager->m_callbacks.afterRender   = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_RenderEnd(m, f); };
     deviceManager->m_callbacks.beforePresent = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_PresentStart(m, f); };
-    deviceManager->m_callbacks.afterPresent  = [this](donut::app::DeviceManager &m, uint32_t f){
-        const int PresentInterval = 10;
-        if (hackOptions.enableHack && hackOptions.storeOutput && GetFrameIndex() < hackOptions.outputMaxCount) {
+    deviceManager->m_callbacks.afterPresent  = [this](donut::app::DeviceManager &m, uint32_t frameIdx){
+        // CaptureScreenshotSync() will handle the synchronization internally.
+        if (hackOptions.enableHack && hackOptions.storeOutput && frameIdx < hackOptions.outputMaxCount) {
             HWND hWnd = glfwGetWin32Window(m.GetWindow());
 
-            // First screenshot
-            {
-                std::string filename0 = hackOptions.outPath.string() +
-                    "/frame_" + std::to_string(GetFrameIndex()) + "-screenshot_0.png";
-                m.CaptureFrontBufferScreenshot(hWnd, filename0.c_str());
-            }
-            std::this_thread::sleep_for(std::chrono::seconds(5));
+            std::string filename0 = hackOptions.outPath.string() +
+                "/frame_" + std::to_string(frameIdx) + "-screenshot_0.exr";
+            CaptureScreenshotSync(hWnd, filename0, hackOptions.StoreDelayMS);
 
-            // Second screenshot
-            {
-                std::string filename1 = hackOptions.outPath.string() + 
-                    "/frame_" + std::to_string(GetFrameIndex()) + "-screenshot_1.png";
-                m.CaptureFrontBufferScreenshot(hWnd, filename1.c_str());
-            }
-            std::this_thread::sleep_for(std::chrono::seconds(5));
+            std::string filename1 = hackOptions.outPath.string() +
+                "/frame_" + std::to_string(frameIdx) + "-screenshot_1.exr";
+            CaptureScreenshotSync(hWnd, filename1, hackOptions.StoreDelayMS);
         }
-        
-        NVWrapper::Get().ReflexCallback_PresentEnd(m, f); 
+
+        NVWrapper::Get().ReflexCallback_PresentEnd(m, frameIdx); 
     };
 
     if (m_ScriptingConfig.Reflex_mode != -1 && NVWrapper::Get().GetReflexAvailable()) {
@@ -446,6 +439,82 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
     auto depthFiles = loadFrameCaptures(hackOptions.hackPaths[2], hackDataType::GBUFFER_DEPTH);
 
     return true;
+}
+
+void StreamlineSample::CaptureScreenshotSync(HWND hWnd, std::string filename, const int64_t StoreDelayMS) {
+    auto captureStart = std::chrono::high_resolution_clock::now();
+
+    // Get window dimensions with DPI awareness
+    RECT rect;
+    GetClientRect(hWnd, &rect);
+    int width = rect.right - rect.left;
+    int height = rect.bottom - rect.top;
+
+    // Get actual screen coordinates
+    POINT pt = { 0, 0 };
+    ClientToScreen(hWnd, &pt);
+    RECT screenRect = { pt.x, pt.y, pt.x + width, pt.y + height };
+
+    // Create device contexts
+    HDC hdcScreen = GetDC(nullptr); // Use screen DC instead of window DC
+    HDC hdcMem = CreateCompatibleDC(hdcScreen);
+
+    // Create 32-bit bitmap (matches most displays)
+    BITMAPINFO bmi = { 0 };
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = -height; // Top-down
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    uint32_t* bgraData = nullptr;
+    HBITMAP hBitmap = CreateDIBSection(hdcMem, (BITMAPINFO*)&bmi,
+        DIB_RGB_COLORS, reinterpret_cast<void**>(&bgraData), nullptr, 0);
+
+    if (!hBitmap) {
+        ReleaseDC(nullptr, hdcScreen);
+        return;
+    }
+
+    SelectObject(hdcMem, hBitmap);
+
+    // Capture with diagnostic
+    BOOL captureSuccess = BitBlt(hdcMem, 0, 0, width, height, hdcScreen, 0, 0, SRCCOPY);
+    if (!captureSuccess) {
+        DWORD err = GetLastError();
+        log::error("BitBlt failed: %d", err);
+    }
+
+    // Get bitmap data directly from DIB section
+    const int pixelCount = width * height;
+    std::vector<uint8_t> pixels(width * height * 3);
+
+    // Convert BGRA to RGB; BGRA on little-endian (Windows) is 0xAARRGGBB
+    for (int i = 0; i < pixelCount; i++) {
+        pixels[i * 3 + 0] = static_cast<uint8_t>((bgraData[i] >> 16) & 0xFF); // R
+        pixels[i * 3 + 1] = static_cast<uint8_t>((bgraData[i] >> 8) & 0xFF);  // G
+        pixels[i * 3 + 2] = static_cast<uint8_t>(bgraData[i] & 0xFF);         // B
+    }
+
+    // Save as PNG
+    stbi_write_png(filename.c_str(), width, height, 3, pixels.data(), width * 3);
+
+    // Cleanup
+    DeleteObject(hBitmap);
+    DeleteDC(hdcMem);
+    ReleaseDC(nullptr, hdcScreen);
+
+    // Calculate remaining time to meet minimum display duration
+    auto captureEnd = std::chrono::high_resolution_clock::now();
+    auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(captureEnd - captureStart).count();
+    int64_t remainingWait = StoreDelayMS - elapsedMS;
+    if (remainingWait > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
+    }
+    else {
+        log::error("StoreDelayMS = %d ms set too low, taking screenshot took %d ms", StoreDelayMS, elapsedMS);
+    }
 }
 
 void StreamlineSample::SetLatewarpOptions()
