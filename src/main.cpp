@@ -301,7 +301,7 @@ int main(int __argc, const char* const* __argv)
 #endif
     // copy necessary hack options to deviceManager
     deviceManager->enableHack = hackOptions.enableHack;
-	deviceManager->FramesToSkip = hackOptions.FramesToSkip;
+	//deviceManager->FramesToReplay = hackOptions.FramesToReplay;
 
     if (!deviceManager->CreateWindowDeviceAndSwapChain(deviceParams, windowTitle.c_str()))
     {

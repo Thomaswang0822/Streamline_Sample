@@ -181,7 +181,7 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
 
     // manual change for DEBUG
     //options.enableHack = false;
-    options.storeOutput = false;
+    //options.storeOutput = false;
     return options;
 }
 
@@ -293,21 +293,43 @@ StreamlineSample::StreamlineSample(
     deviceManager->m_callbacks.beforeRender  = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_RenderStart(m, f); };
     deviceManager->m_callbacks.afterRender   = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_RenderEnd(m, f); };
     deviceManager->m_callbacks.beforePresent = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_PresentStart(m, f); };
-    deviceManager->m_callbacks.afterPresent  = [this](donut::app::DeviceManager &m, uint32_t frameIdx){
-        // CaptureScreenshotSync() will handle the synchronization internally.
-        if (hackOptions.enableHack && hackOptions.storeOutput && 
-            GetDeviceManager()->FramesToSkip == 0 && frameIdx < hackOptions.outputMaxCount)
+    deviceManager->m_callbacks.afterPresent  = [this](donut::app::DeviceManager &m, uint32_t frameIdx) {
+        /// FramesToReplay (default 3) is to solve the DLSS-G cold start problem.
+        /// Without it, captured frames are:
+        /// 0A: Visual Studio (renderer window not opened yet); 0B: Frame 0
+        /// 1A: Frame 0; 1B: Frame 1;
+        /// 2A: Frame 1; 2B: Frame 1; (This is weird)
+        /// 3A: Frame 2; 3B: Frame 2.5 (FG frame); etc.
+        /// The solution is simple: store the first FramesToReplay frames in the next iteration, which are correct data,
+        /// to replace the first FramesToReplay frames in the first iteration, which are wrong (see above) due to DLSSG cold start.
+        /// E.g we have 10 frames, then frames [10, 12] can be used as frames [0, 2]
+        ///
+        /// BUT NOTE: we have to waste time saving those cold frames, otherwise super uneven present time,
+        /// e.g. 60 fps vs 6s per frame will lead to wrong captured frame.
+        /// 
+        /// Also, when calling CaptureScreenshotSync() at frame t, frame t-1 is what's being
+        /// Presnet() and captured, probably because Present() is async.
+        /// Thus, we adjust the filename accordingly.
+        if (hackOptions.enableHack && hackOptions.storeOutput && // should store
+            //frameIdx >= hackOptions.FramesToReplay && // have skipped dummy frames
+            frameIdx < hackOptions.outputMaxCount + hackOptions.FramesToReplay) // within range
         {
             HWND hWnd = glfwGetWin32Window(m.GetWindow());
 
-            std::string filename0 = hackOptions.outPath.string() + "/" + 
-                hackOptions.identifier + "/frame_" + std::to_string(frameIdx) + "_native.png";
+            auto fixDigitString = [](uint32_t fid, size_t length = 3) -> std::string
+            {
+                return std::string(length - std::to_string(fid).length(), '0') + std::to_string(fid);
+            };
+            std::string frameIdStr = fixDigitString((frameIdx + hackOptions.outputMaxCount - 1) % hackOptions.outputMaxCount);
+            std::string filename0 = hackOptions.outPath.string() + "/" +
+                hackOptions.identifier + "_frame" + frameIdStr + "A_og.png";
             CaptureScreenshotSync(hWnd, filename0, hackOptions.StoreDelayMS);
 
             std::string filename1 = hackOptions.outPath.string() + "/" +
-                hackOptions.identifier + "/frame_" + std::to_string(frameIdx) + "_fg.png";
+                hackOptions.identifier + "_frame" + frameIdStr + "B_fg.png";
             CaptureScreenshotSync(hWnd, filename1, hackOptions.StoreDelayMS);
         }
+        // CaptureScreenshotSync() will handle the synchronization internally.
 
         NVWrapper::Get().ReflexCallback_PresentEnd(m, frameIdx); 
     };
@@ -388,49 +410,49 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
     auto loadFrameCaptures = [&]
     (const std::filesystem::path& hackPath, hackDataType dtype)
         -> std::vector<std::filesystem::path>
+    {
+        // Immediately invoked lambda
+        auto& hackLoadedData = [dtype, this]() -> std::vector<std::shared_ptr<donut::engine::TextureData>>&
         {
-            std::vector<std::filesystem::path> filePaths;
-            bool shouldParseJitter = dtype == hackDataType::COLOR_HDR && hackOptions.parseJitter;
-            size_t nFiles = textureCache->TraverseFolderPath(
-                hackPath, filePaths, shouldParseJitter, hackLoadedJitterOffsets, ".exr");
-            // double check
-            assert(nFiles == hackOptions.frameCount,
-                "#input files counted by TraverseFolder() (%d) and lambda function in parser (%d) don't match.",
-                nTextures,
-                hackOptions.frameCount);
-
-
-            if (nFiles < hackOptions.outputMaxCount) {
-                log::error("Expect to run %d frames more than %s frame captures: %d",
-                    hackOptions.outputMaxCount, hackPath.generic_string(), nFiles);
+            switch (dtype) {
+            case hackDataType::COLOR_HDR:
+                return hackLoadedColorsHDR;
+            case hackDataType::MOTION_VECTORS:
+                return hackLoadedMVs;
+            case hackDataType::GBUFFER_DEPTH:
+                return hackLoadedDepths;
+            default:
+                log::error("Wrong hackDataType");
             }
+        }();
+            
+        std::vector<std::filesystem::path> filePaths;
+        bool shouldParseJitter = dtype == hackDataType::COLOR_HDR && hackOptions.parseJitter;
+        size_t nFiles = textureCache->TraverseFolderPath(
+            hackPath, filePaths, shouldParseJitter, hackLoadedJitterOffsets, ".exr");
+        // double check
+        assert(nFiles == hackOptions.frameCount,
+            "#input files counted by TraverseFolder() (%d) and lambda function in parser (%d) don't match.",
+            nTextures,
+            hackOptions.frameCount);
 
-            // we may want to run only 5 frames even there are 60 in the folder
-            for (size_t frameIdx = 0; frameIdx < hackOptions.outputMaxCount; ++frameIdx) {
-                auto& filePath = filePaths[frameIdx];
 
-                std::shared_ptr<donut::engine::TextureData> loadedTexture =
-                    textureCache->hackLoadTextureFromFile(filePath, dtype);
+        if (nFiles < hackOptions.outputMaxCount) {
+            log::error("Expect to run %d frames more than %s frame captures: %d",
+                hackOptions.outputMaxCount, hackPath.generic_string(), nFiles);
+        }
 
-                switch (dtype)
-                {
-                case hackDataType::COLOR_HDR:
-                    hackLoadedColorsHDR.push_back(loadedTexture);
-                    break;
-                case hackDataType::MOTION_VECTORS:
-                    hackLoadedMVs.push_back(loadedTexture);
-                    break;
-                case hackDataType::GBUFFER_DEPTH:
-                    hackLoadedDepths.push_back(loadedTexture);
-                    break;
-                default:
-                    log::error("Unsupported hackDataType %d", static_cast<int>(dtype));
-                    break;
-                }
-            }
+        for (size_t frameIdx = 0; frameIdx < hackOptions.outputMaxCount; ++frameIdx) {
+            auto& filePath = filePaths[frameIdx];
 
-            return filePaths;
-        };
+            std::shared_ptr<donut::engine::TextureData> loadedTexture = 
+                textureCache->hackLoadTextureFromFile(filePath, dtype);
+
+            hackLoadedData.push_back(loadedTexture);
+        }
+
+        return filePaths;
+    };
 
     auto exrFiles = loadFrameCaptures(hackOptions.hackPaths[0], hackDataType::COLOR_HDR);
     auto mvFiles = loadFrameCaptures(hackOptions.hackPaths[2], hackDataType::MOTION_VECTORS);
@@ -1639,11 +1661,12 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         slConstants.motionVectorsInvalidValue = FLT_MIN;
 
         // will cause error if SetSLConsts() on those duplicate frame 0
-        if (GetFrameIndex() > 0 ||
-            GetDeviceManager()->FramesToSkip == hackOptions.FramesToSkip)
+        //if (GetFrameIndex() > 0 ||
+        //    GetDeviceManager()->FramesToReplay == hackOptions.FramesToReplay)
+        if (GetFrameIndex() > 0)
         {
-            NVWrapper::Get().SetSLConsts(slConstants);
         }
+        NVWrapper::Get().SetSLConsts(slConstants);
     }
 
     // TAG STREAMLINE RESOURCES
@@ -1896,7 +1919,10 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     GetDevice()->executeCommandList(m_CommandList);
 
     // EXPORT: backend export disabled because it cannot capture FG frames
-    if (false && hackOptions.enableHack && hackOptions.storeOutput && GetFrameIndex() < hackOptions.outputMaxCount) {
+    if (false && hackOptions.enableHack && hackOptions.storeOutput && // should store
+        GetFrameIndex() >= hackOptions.FramesToReplay && // have skipped dummy frames
+        GetFrameIndex() < hackOptions.outputMaxCount + hackOptions.FramesToReplay) // within range
+    {
         auto filePath = hackOptions.outPath;
         if (!std::filesystem::exists(filePath)) {
             bool created = std::filesystem::create_directory(filePath);
@@ -1958,7 +1984,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
 
     // CLOSE: early close when we store hack output; 
     // run several more frame to avoid strange frame sync error under fullscreen mode, which causes the system to freeze.
-    if (hackOptions.storeOutput && GetFrameIndex() == hackOptions.outputMaxCount + 5)
+    if (hackOptions.storeOutput && GetFrameIndex() == hackOptions.FramesToReplay + hackOptions.outputMaxCount + 5)
         glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);
 
     if (GetFrameIndex() == m_ScriptingConfig.maxFrames)

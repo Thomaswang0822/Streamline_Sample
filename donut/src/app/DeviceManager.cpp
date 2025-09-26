@@ -641,11 +641,6 @@ bool DeviceManager::AnimateRenderPresent()
     m_PreviousFrameTimestamp = curTime;
 
     ++m_FrameIndex;
-    // we want to skip first 3 frames while changing as few code as possible, thus update frame index accordingly.
-    if (enableHack && FramesToSkip > 0) {
-        FramesToSkip--;
-		m_FrameIndex--;
-    }
     return true;
 }
 

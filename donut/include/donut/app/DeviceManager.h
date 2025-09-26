@@ -231,8 +231,6 @@ namespace donut::app
     public:
         // we only need hack ON/OFF to decide whether to allow window resize
         bool enableHack;
-        // and num frames to skip at startup, see details in HackOptionDef
-        size_t FramesToSkip;
 
         static DeviceManager* Create(nvrhi::GraphicsAPI api);
 
