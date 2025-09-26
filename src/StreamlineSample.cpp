@@ -180,8 +180,8 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
     }
 
     // manual change for DEBUG
-    //options.enableHack = false;
-    //options.storeOutput = false;
+    options.enableHack = false;
+    options.storeOutput = false;
     return options;
 }
 

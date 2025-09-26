@@ -89,7 +89,7 @@ public:
     donut::render::SsaoParameters       SsaoParams;
 
     // Tonemapping
-    bool                                 EnableToneMapping = true;
+    bool                                 EnableToneMapping = false;
     donut::render::ToneMappingParameters ToneMappingParams;
 
     // Sky

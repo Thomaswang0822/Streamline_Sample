@@ -239,7 +239,8 @@ int main(int __argc, const char* const* __argv)
     deviceParams.swapChainBufferCount = 3;
     deviceParams.startFullscreen = false;
     deviceParams.vsyncEnabled = false;
-    deviceParams.swapChainFormat = nvrhi::Format::BGRA8_UNORM;
+    //deviceParams.swapChainFormat = nvrhi::Format::BGRA8_UNORM;
+    deviceParams.swapChainFormat = nvrhi::Format::RGBA16_FLOAT;
 #ifndef NDEBUG
     if (api != nvrhi::GraphicsAPI::VULKAN)
     {
