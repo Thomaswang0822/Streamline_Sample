@@ -336,7 +336,7 @@ bool DeviceManager::CreateWindowDeviceAndSwapChain(const DeviceCreationParameter
         int fbWidth = 0, fbHeight = 0;
         glfwGetFramebufferSize(m_Window, &fbWidth, &fbHeight);
         // do not resize to GLFW window size if hack
-        if (!hackEnabled) {
+        if (!enableHack) {
             m_DeviceParams.backBufferWidth = fbWidth;
             m_DeviceParams.backBufferHeight = fbHeight;
         }
@@ -389,7 +389,7 @@ bool DeviceManager::CreateWindowDeviceAndSwapChain(const DeviceCreationParameter
     m_DeviceParams.backBufferWidth = 0;
     m_DeviceParams.backBufferHeight = 0;
 
-    if (hackEnabled)
+    if (enableHack)
 	    UpdateCustomWindowSize(origWidth, origHeight);
     else
 		UpdateWindowSize();
@@ -551,7 +551,7 @@ void DeviceManager::RunMessageLoop()
             m_callbacks.beforeFrame(*this, m_FrameIndex);
         glfwPollEvents();
 
-        if (hackEnabled)
+        if (enableHack)
 		    UpdateCustomWindowSize(m_DeviceParams.backBufferWidth, m_DeviceParams.backBufferHeight);
         else
             UpdateWindowSize();
@@ -647,6 +647,11 @@ bool DeviceManager::AnimateRenderPresent()
     m_PreviousFrameTimestamp = curTime;
 
     ++m_FrameIndex;
+    // we want to skip first 3 frames while changing as few code as possible, thus update frame index accordingly.
+    if (enableHack && FramesToSkip > 0) {
+        FramesToSkip--;
+		m_FrameIndex--;
+    }
     return true;
 }
 

@@ -298,8 +298,9 @@ int main(int __argc, const char* const* __argv)
         deviceParams.requiredVulkanDeviceExtensions.push_back("VK_KHR_pipeline_library");
     }
 #endif
-
-    deviceManager->hackEnabled = hackOptions.enableHack;
+    // copy necessary hack options to deviceManager
+    deviceManager->enableHack = hackOptions.enableHack;
+	deviceManager->FramesToSkip = hackOptions.FramesToSkip;
 
     if (!deviceManager->CreateWindowDeviceAndSwapChain(deviceParams, windowTitle.c_str()))
     {

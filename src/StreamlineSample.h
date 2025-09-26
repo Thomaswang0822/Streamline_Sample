@@ -278,7 +278,7 @@ public:
         /// 1A: Frame 0; 1B: Frame 1;
         /// 2A: Frame 1; 2B: Frame 1; (This is weird)
         /// 3A: Frame 2; 3B: Frame 2.5 (FG frame)
-        const static uint32_t numSkippedFrames = 3;
+        const static uint32_t FramesToSkip = 3;
     } hackOptions;
     // read-only data storage to copy from; copy dst are RTs defined in RenderTargets.h and GBuffer.h
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedColorsLDR;

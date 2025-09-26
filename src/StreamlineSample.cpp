@@ -181,7 +181,7 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
 
     // manual change for DEBUG
     //options.enableHack = false;
-    //options.storeOutput = false;
+    options.storeOutput = false;
     return options;
 }
 
@@ -295,7 +295,9 @@ StreamlineSample::StreamlineSample(
     deviceManager->m_callbacks.beforePresent = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_PresentStart(m, f); };
     deviceManager->m_callbacks.afterPresent  = [this](donut::app::DeviceManager &m, uint32_t frameIdx){
         // CaptureScreenshotSync() will handle the synchronization internally.
-        if (hackOptions.enableHack && hackOptions.storeOutput && frameIdx < hackOptions.outputMaxCount) {
+        if (hackOptions.enableHack && hackOptions.storeOutput && 
+            GetDeviceManager()->FramesToSkip == 0 && frameIdx < hackOptions.outputMaxCount)
+        {
             HWND hWnd = glfwGetWin32Window(m.GetWindow());
 
             std::string filename0 = hackOptions.outPath.string() +
@@ -1648,7 +1650,12 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         slConstants.motionVectors3D = sl::Boolean::eFalse;
         slConstants.motionVectorsInvalidValue = FLT_MIN;
 
-        NVWrapper::Get().SetSLConsts(slConstants);
+        // will cause error if SetSLConsts() on those duplicate frame 0
+        if (GetFrameIndex() > 0 ||
+            GetDeviceManager()->FramesToSkip == hackOptions.FramesToSkip)
+        {
+            NVWrapper::Get().SetSLConsts(slConstants);
+        }
     }
 
     // TAG STREAMLINE RESOURCES
