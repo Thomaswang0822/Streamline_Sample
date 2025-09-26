@@ -90,7 +90,13 @@ public:
         return nvrhi::GraphicsAPI::D3D12;
     }
 
-    void DeviceManager_DX12::CaptureSwapChainBuffers(std::filesystem::path pngPath);
+    /**
+     * Attempt 3 (see Attempt 1 & 2 by SaveRTsToEXR() in TextureCache.h
+     * Directly store raw ID3D12Resource m_SwapChainBuffers to PNG file.
+     * They don't store FG frame either.
+     */
+    [[deprecated("Cannot export FG frames, deprecated")]]
+    void DeviceManager_DX12::SaveDX12SwapChainBuffers(std::filesystem::path pngPath);
     
 protected:
     bool CreateInstanceInternal() override;

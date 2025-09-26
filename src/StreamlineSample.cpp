@@ -300,12 +300,12 @@ StreamlineSample::StreamlineSample(
         {
             HWND hWnd = glfwGetWin32Window(m.GetWindow());
 
-            std::string filename0 = hackOptions.outPath.string() +
-                "/frame_" + std::to_string(frameIdx) + "-screenshot_0.exr";
+            std::string filename0 = hackOptions.outPath.string() + "/" + 
+                hackOptions.identifier + "/frame_" + std::to_string(frameIdx) + "_native.png";
             CaptureScreenshotSync(hWnd, filename0, hackOptions.StoreDelayMS);
 
-            std::string filename1 = hackOptions.outPath.string() +
-                "/frame_" + std::to_string(frameIdx) + "-screenshot_1.exr";
+            std::string filename1 = hackOptions.outPath.string() + "/" +
+                hackOptions.identifier + "/frame_" + std::to_string(frameIdx) + "_fg.png";
             CaptureScreenshotSync(hWnd, filename1, hackOptions.StoreDelayMS);
         }
 
@@ -414,9 +414,6 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
 
                 switch (dtype)
                 {
-                case hackDataType::COLOR_LDR:
-                    hackLoadedColorsLDR.push_back(loadedTexture);
-                    break;
                 case hackDataType::COLOR_HDR:
                     hackLoadedColorsHDR.push_back(loadedTexture);
                     break;
@@ -436,7 +433,6 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
         };
 
     auto exrFiles = loadFrameCaptures(hackOptions.hackPaths[0], hackDataType::COLOR_HDR);
-    auto pngFiles = loadFrameCaptures(hackOptions.hackPaths[1], hackDataType::COLOR_LDR);
     auto mvFiles = loadFrameCaptures(hackOptions.hackPaths[2], hackDataType::MOTION_VECTORS);
     auto depthFiles = loadFrameCaptures(hackOptions.hackPaths[2], hackDataType::GBUFFER_DEPTH);
 
@@ -1502,18 +1498,8 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
                 "GBufferFill");
 
     // Earliest time to copy per-frame data to hack RT. Must come after above GBuffer render which clears all RTs.
-    auto _checkLDR = m_RenderTargets->hackPreUIColor->getDesc();
-    auto _checkHDR = m_RenderTargets->hackHdrColor->getDesc();
-    auto _checkMV = m_RenderTargets->MotionVectors->getDesc();
-    const auto& _checkJitter = hackLoadedJitterOffsets;
-    auto descHackMV = m_RenderTargets->hackMotionVectors->getDesc();
-    auto descDepth = m_RenderTargets->Depth->getDesc();
     if (hackOptions.enableHack) {
         uint32_t hackFrameId = GetFrameIndex() % hackOptions.outputMaxCount;
-        const TextureSubresourceData& layoutLDR = hackLoadedColorsLDR[hackFrameId]->dataLayout[0][0];
-        m_CommandList->writeTexture(m_RenderTargets->hackPreUIColor, 0, 0,
-            static_cast<const void*>(hackLoadedColorsLDR[hackFrameId]->data->data()),
-            layoutLDR.rowPitch, layoutLDR.depthPitch);
 
         const TextureSubresourceData& layoutHDR = hackLoadedColorsHDR[hackFrameId]->dataLayout[0][0];
         m_CommandList->writeTexture(m_RenderTargets->hackHdrColor, 0, 0,
@@ -1531,8 +1517,10 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
             layoutDepth.rowPitch, layoutDepth.depthPitch);
 
         // MV and depth need to restore resources state after copy; probably because they are not virtual textures
+        auto descHackMV = m_RenderTargets->hackMotionVectors->getDesc();
+        auto descHackDepth = m_RenderTargets->Depth->getDesc();
         m_CommandList->setTextureState(m_RenderTargets->hackMotionVectors, nvrhi::AllSubresources, descHackMV.initialState);
-        m_CommandList->setTextureState(m_RenderTargets->hackDepth, nvrhi::AllSubresources, descDepth.initialState);
+        m_CommandList->setTextureState(m_RenderTargets->hackDepth, nvrhi::AllSubresources, descHackDepth.initialState);
         m_CommandList->commitBarriers();
 
     }
@@ -1664,7 +1652,8 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
             m_View->GetChildView(ViewType::PLANAR, 0),
             m_RenderTargets->hackMotionVectors,
             m_RenderTargets->hackDepth,
-            m_RenderTargets->hackPreUIColor
+            // PreUIColor is only used as DLSS output target, thus we don't create hack version of it. 
+            m_RenderTargets->PreUIColor
         );
     }
     else {
@@ -1920,7 +1909,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         uint sourceId = 0;  // 0: AAResolvedColor, 1: PreUIColor, 2: all 3 back buffers
         if (sourceId == 0) {
             auto& _checkColorAttachement = m_RenderTargets->AAResolvedFramebuffer->RenderTargets;
-            success = SaveHackToEXR(
+            success = SaveRTsToEXR(
                 GetDevice(),
                 //m_RenderTargets->AAResolvedColor,
 				m_RenderTargets->AAResolvedFramebuffer->GetFramebuffer(*m_View)->getDesc().colorAttachments[0].texture,
@@ -1928,7 +1917,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
             );
         }
         else if (sourceId == 1) {
-            success = SaveHackToEXR(
+            success = SaveRTsToEXR(
                 GetDevice(),
                 m_RenderTargets->PreUIColor,
                 filePath.string().c_str()
@@ -1941,7 +1930,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
                 filename = hackOptions.identifier + "_" + std::to_string(GetFrameIndex())
                     + "_bb" + std::to_string(i) + ".exr";
                 auto fp = hackOptions.outPath / filename;
-                success = success && SaveHackToEXR(
+                success = success && SaveRTsToEXR(
                     GetDevice(),
                     framebuffer->getDesc().colorAttachments[i].texture,
                     fp.string().c_str()

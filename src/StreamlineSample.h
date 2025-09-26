@@ -281,7 +281,6 @@ public:
         const static uint32_t FramesToSkip = 3;
     } hackOptions;
     // read-only data storage to copy from; copy dst are RTs defined in RenderTargets.h and GBuffer.h
-    std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedColorsLDR;
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedColorsHDR;
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedMVs;
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedDepths;
@@ -301,6 +300,13 @@ public:
         m_ui.REFLEX_Mode = static_cast<int>(sl::ReflexMode::eLowLatency);
     }
 
+    /**
+     * Attempt 4: Save screenshot from frontend by passing the GLFW window to Windows API.
+     * Finally we find a way to save FG frames.
+     * 
+     * \param hWnd A Windows handle of the GLFW window get by glfwGetWin32Window() a GLFWwindow*
+	 * \param StoreDelayMS Need a delay to ensure successful capture of presented frame. See HackOptionDef::StoreDelayMS.
+     */
     void CaptureScreenshotSync(HWND hWnd, std::string filename, const int64_t StoreDelayMS);
 #pragma endregion
 

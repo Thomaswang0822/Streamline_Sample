@@ -98,15 +98,6 @@ void GBufferRenderTargets::Init(
     }
     MotionVectors = device->createTexture(desc);
 
-    desc = MotionVectors->getDesc();
-    desc.debugName = "hackGBufferMotionVectors";
-    hackMotionVectors = device->createTexture(desc);
-
-    desc = Depth->getDesc();
-    desc.debugName = "hackGBufferDepth";
-    hackDepth = device->createTexture(desc);
-
-
     GBufferFramebuffer = std::make_shared<FramebufferFactory>(device);
     GBufferFramebuffer->RenderTargets = {
         GBufferDiffuse,
@@ -137,8 +128,4 @@ void GBufferRenderTargets::Clear(nvrhi::ICommandList* commandList)
     commandList->clearTextureFloat(GBufferNormals, nvrhi::AllSubresources, nvrhi::Color(0.f));
     commandList->clearTextureFloat(GBufferEmissive, nvrhi::AllSubresources, nvrhi::Color(0.f));
     commandList->clearTextureFloat(MotionVectors, nvrhi::AllSubresources, nvrhi::Color(0.f));
-    
-    commandList->clearTextureFloat(hackMotionVectors, nvrhi::AllSubresources, nvrhi::Color(0.f));
-    commandList->clearDepthStencilTexture(hackDepth, nvrhi::AllSubresources, true, depthClearValue, depthFormatInfo.hasStencil, 0);
-
 }

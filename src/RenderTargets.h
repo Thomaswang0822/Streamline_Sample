@@ -69,8 +69,9 @@ public:
     // general options and loaded texture data are in StreamlineSample class.
 
     // used for render targets; MV and Depth are in GBufferRenderTargets
-    nvrhi::TextureHandle hackPreUIColor;
     nvrhi::TextureHandle hackHdrColor;
+    nvrhi::TextureHandle hackMotionVectors;
+    nvrhi::TextureHandle hackDepth;
 #pragma endregion
 
     nvrhi::HeapHandle Heap;
@@ -96,6 +97,16 @@ public:
     {
         GBufferRenderTargets::Init(device, (donut::math::uint2) renderSize, sampleCount, enableMotionVectors, useReverseProjection);
 
+        /// hackMotionVectors and hackDepth need to be created first, possibly because
+        /// they are not virtual textures. Otherwise CommandList::commitBarriers() will
+        /// throw error when calling m_ActiveCommandList->commandList->ResourceBarrier()
+        nvrhi::TextureDesc descMV = MotionVectors->getDesc();
+        descMV.debugName = "hackGBufferMotionVectors";
+        hackMotionVectors = device->createTexture(descMV);
+        
+        nvrhi::TextureDesc descDepth = Depth->getDesc();
+        descDepth.debugName = "hackGBufferDepth";
+        hackDepth = device->createTexture(descDepth);
 
         m_RenderSize = renderSize;
         m_DisplaySize = displaySize;
@@ -187,15 +198,10 @@ public:
         desc.debugName = "PreUIColor";
         PreUIColor = device->createTexture(desc);
 
-#pragma region HACK
-        desc = PreUIColor->getDesc();
-        desc.debugName = "hackPreUIColor";
-        hackPreUIColor = device->createTexture(desc);
-
+        // hackHdrColor works like HdrColor
         desc = HdrColor->getDesc();
         desc.debugName = "hackHdrColor";
         hackHdrColor = device->createTexture(desc);
-#pragma endregion
 
         if (desc.isVirtual)
         {
@@ -217,8 +223,7 @@ public:
                 AmbientOcclusion,
                 GBufferSpecularRR,
                 GBufferDiffuseRR,
-                // hack render targets
-                hackPreUIColor,
+                // only HdrColor is virtual, MV and Depth are not
                 hackHdrColor,
             };
 
@@ -280,6 +285,12 @@ public:
     {
         GBufferRenderTargets::Clear(commandList);
 
+        /// Similarly, hackMotionVectors and hackDepth need to be cleared first.
+        const nvrhi::FormatInfo& depthFormatInfo = nvrhi::getFormatInfo(Depth->getDesc().format);
+        float depthClearValue = m_UseReverseProjection ? 0.f : 1.f;
+        commandList->clearDepthStencilTexture(hackDepth, nvrhi::AllSubresources, true, depthClearValue, depthFormatInfo.hasStencil, 0);
+        commandList->clearTextureFloat(hackMotionVectors, nvrhi::AllSubresources, nvrhi::Color(0.f));
+        
         commandList->clearTextureFloat(HdrColor, nvrhi::AllSubresources, nvrhi::Color(0.f));
         commandList->clearTextureFloat(LdrColor, nvrhi::AllSubresources, nvrhi::Color(0.f));
         commandList->clearTextureFloat(NisColor, nvrhi::AllSubresources, nvrhi::Color(0.f));
@@ -291,7 +302,6 @@ public:
         commandList->clearTextureFloat(GBufferNormalsRR, nvrhi::AllSubresources, nvrhi::Color(0.f));
         commandList->clearTextureFloat(GBufferEmissiveRR, nvrhi::AllSubresources, nvrhi::Color(0.f));
 
-        commandList->clearTextureFloat(hackPreUIColor, nvrhi::AllSubresources, nvrhi::Color(0.f));
         commandList->clearTextureFloat(hackHdrColor, nvrhi::AllSubresources, nvrhi::Color(0.f));
     }
 };

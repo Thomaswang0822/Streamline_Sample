@@ -344,8 +344,7 @@ bool TextureCache::FillTextureData(
 bool TextureCache::hackLoadEXRFromFile(
     char** outputData,
     int* width, int* height,
-    std::filesystem::path textureFile,
-    bool toLDR) const
+    std::filesystem::path textureFile) const
 {
     std::string fileName = textureFile.string();
 
@@ -429,8 +428,8 @@ bool TextureCache::hackLoadEXRFromFile(
     tinyexr::FP32 fp32_ONE; fp32_ONE.f = 1.0f;
     const uint16_t      fp16_ONE = tinyexr::float_to_half_full(fp32_ONE).u;
 
-    // first malloc byte array: RGBA16_Float is 4 channels x 2 bytes; BGRA8_UNORM is 4 x 1
-    const size_t bytesPerPixel = toLDR? 4 : 8;
+    // first malloc byte array: RGBA16_Float is 4 channels x 2 bytes
+    const size_t bytesPerPixel = 4 * 2;
     char* finalCharData = static_cast<char*>(malloc(pixelCount * bytesPerPixel));
     if (!finalCharData)
     {
@@ -462,19 +461,11 @@ bool TextureCache::hackLoadEXRFromFile(
             idxSrc = i * image.width + j;
             idxDst = i * image.width + j;
 
-            if (!toLDR) {
-                // store directly to uint16_t*
-                fp16Data[4 * idxDst + 0] = r[idxSrc];
-                fp16Data[4 * idxDst + 1] = g[idxSrc];
-                fp16Data[4 * idxDst + 2] = b[idxSrc];
-                fp16Data[4 * idxDst + 3] = a ? a[idxSrc] : fp16_ONE;
-            }
-            else {
-                u8Data[4 * idxDst + 0] = convertToU8(b[idxSrc]);
-                u8Data[4 * idxDst + 1] = convertToU8(g[idxSrc]);
-                u8Data[4 * idxDst + 2] = convertToU8(r[idxSrc]);
-                u8Data[4 * idxDst + 3] = convertToU8(a ? a[idxSrc] : fp16_ONE);
-            }
+            // store directly to uint16_t*
+            fp16Data[4 * idxDst + 0] = r[idxSrc];
+            fp16Data[4 * idxDst + 1] = g[idxSrc];
+            fp16Data[4 * idxDst + 2] = b[idxSrc];
+            fp16Data[4 * idxDst + 3] = a ? a[idxSrc] : fp16_ONE;
         }
     }
 
@@ -854,20 +845,9 @@ std::shared_ptr<TextureData> TextureCache::hackLoadTextureFromFile(
     uint32_t bytesPerPixel = dtype == HackDataType::COLOR_HDR ? channels * 2 : channels;
     switch (dtype)
     {
-    case HackDataType::COLOR_LDR:
-    {
-        if (!hackLoadEXRFromFile(&data, &width, &height, pathStr, true /* toLDR */)) {
-            log::error("Couldn't load generic texture '%s'", texture->path.c_str());
-            return nullptr;
-        }
-        texture->format = nvrhi::Format::BGRA8_UNORM;
-        texture->data = std::make_shared<Blob>(data, bytesPerPixel * width * height);
-
-        break;
-    }
     case HackDataType::COLOR_HDR:
     {
-        if (!hackLoadEXRFromFile(&data, &width, &height, pathStr, false /* toLDR */)) {
+        if (!hackLoadEXRFromFile(&data, &width, &height, pathStr)) {
             log::error("Couldn't load EXR frame '%s'", texture->path.c_str());
             return nullptr;
         }
@@ -1356,8 +1336,10 @@ namespace donut::engine
         return writeSuccess;
     }
 
-    bool SaveHackToEXR(nvrhi::IDevice* device, nvrhi::ITexture* texture, const char* fileName)
+    bool SaveRTsToEXR(nvrhi::IDevice* device, nvrhi::ITexture* texture, const char* fileName)
     {
+        assert(false, "SaveRTsToEXR() is deprecated because it cannot capture FG frames");
+
         const auto& desc = texture->getDesc();
 
         // Create command list and staging texture
@@ -1660,37 +1642,6 @@ namespace donut::engine
         delete[] image.images;
 
         printf("EXR file 'test.exr' created successfully.\n");
-        return true;
-    }
-
-    bool WriteDebugTexture(nvrhi::IDevice* device, nvrhi::ITexture* dest, uint8_t rgb[3])
-    {
-		const auto& desc = dest->getDesc();
-        assert(desc.format == nvrhi::Format::BGRA8_UNORM, "expect to be used on FB, which should have BGRA8_UNORM format");
-        const uint32_t width = desc.width;
-        const uint32_t height = desc.height;
-        const uint32_t rowPitch = width * 4;
-        const uint32_t depthPitch = 0u;
-
-        std::vector<uint8_t> data(width * height * 4);
-        // fill in data
-        for (size_t i = 0; i < width * height; i++)
-        {
-            data[i * 4 + 0] = rgb[2]; // B
-            data[i * 4 + 1] = rgb[1]; // G
-            data[i * 4 + 2] = rgb[0]; // R
-            data[i * 4 + 3] = 255;    // A
-		}
-
-        nvrhi::CommandListHandle commandList = device->createCommandList();
-        commandList->open();
-
-        commandList->writeTexture(dest, 0, 0,
-            static_cast<const void*>(data.data()),
-            rowPitch, depthPitch);
-
-        commandList->close();
-
         return true;
     }
 

@@ -263,6 +263,7 @@ int main(int __argc, const char* const* __argv)
     if (hackOptions.enableHack) {
         deviceParams.backBufferWidth = 3840;
         deviceParams.backBufferHeight = 2160;
+        // disable fullscreen when debugging
         deviceParams.startFullscreen = true;
     }
 

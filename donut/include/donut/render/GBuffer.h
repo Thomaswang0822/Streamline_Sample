@@ -51,12 +51,6 @@ namespace donut::render
 
         nvrhi::TextureHandle MotionVectors;
 
-#pragma region HACK
-        // render targets
-        nvrhi::TextureHandle hackMotionVectors;
-        nvrhi::TextureHandle hackDepth;
-#pragma endregion
-
         std::shared_ptr<engine::FramebufferFactory> GBufferFramebuffer;
 
         virtual ~GBufferRenderTargets() = default;

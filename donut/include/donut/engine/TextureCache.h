@@ -80,10 +80,9 @@ namespace donut::engine
     {
     public:
         enum class HackDataType {
-            COLOR_LDR = 0,
-            COLOR_HDR = 1,
-            MOTION_VECTORS = 2,
-            GBUFFER_DEPTH = 3,
+            COLOR_HDR = 0,
+            MOTION_VECTORS = 1,
+            GBUFFER_DEPTH = 2,
         };
     protected:
         nvrhi::DeviceHandle m_Device;
@@ -124,8 +123,8 @@ namespace donut::engine
         bool hackLoadEXRFromFile(
             char** outputData,
             int* width, int* height,
-            std::filesystem::path textureFile,
-            bool toLDR) const;
+            std::filesystem::path textureFile) const;
+
         /**
          * Load RG16_FLOAT motion vectors or D24S8 depth.
          */
@@ -302,15 +301,27 @@ namespace donut::engine
         const char* fileName,
         bool saveAlphaChannel = true);
 
-    bool SaveHackToEXR(
+    /**
+     * Attempt 1: Save RTs like PreUIColor and AAResolvedColor.
+     * They do not store FG frames.
+     * 
+     * Attempt 2: Save swapchain back buffers (3 per frame).
+     * They are in m_SwapChainFramebuffers of DeviceManager.
+     * They do not store FG frames either.
+     */
+    [[deprecated("Cannot export FG frames, deprecated")]]
+    bool SaveRTsToEXR(
         nvrhi::IDevice* device,
         nvrhi::ITexture* texture,
         const char* fileName);
 
+    /**
+     * Attempt 5: Save screenshot to HDR instead.
+     * Unfortunately, Windows API like BitBlt() cannot capture HDR data.
+     * We need to use DX12 API.
+     */
     [[deprecated("UNDER ACTIVE DEVELOPMENT - DO NOT USE")]]
     bool SaveCaptureDataToEXR(const uint32_t* bgraData, const char* fileName, const uint32_t width, const uint32_t height);
 
     bool TestTinyExrWrite();
-
-    bool WriteDebugTexture(nvrhi::IDevice* device, nvrhi::ITexture* dest, uint8_t rgb[3]);
 }
