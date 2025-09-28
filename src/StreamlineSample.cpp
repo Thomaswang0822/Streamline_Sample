@@ -35,6 +35,7 @@
 #include "StreamlineSample.h"
 #include <sstream>
 #include <thread>
+#include <future>
 #include <stb_image_write.h>
 
 #ifdef STREAMLINE_FEATURE_DLSS_RR
@@ -51,12 +52,32 @@
 #include <../src/vulkan/vulkan-backend.h>
 #endif
 
+#include <winrt/base.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h> // consume_Windows_Foundation_Collections_IVectorView::IndexOf() impl
+#include <winrt/Windows.Media.Capture.h>
+#include <winrt/Windows.Media.Devices.h>
+#include <winrt/Windows.Media.MediaProperties.h> // ImageEncodingProperties::CreateJpeg() impl
+#include <winrt/Windows.Storage.h>
+#include <winrt/Windows.Storage.Streams.h> // RandomAccessStream::CopyAndCloseAsync impl
+
 using namespace donut;
 using namespace donut::math;
 using namespace donut::engine;
 using namespace donut::render;
 using namespace donut::render;
 
+using namespace winrt;
+using namespace Windows::Media::Capture;
+using namespace Windows::Media::Devices;
+using namespace Windows::Media::MediaProperties;
+using namespace Windows::Storage;
+using namespace Windows::Foundation;
+using namespace Windows::Storage::Streams;
+
+
+/// typical usage:
+/// -EnableHack -Identifier FG_TEST -RenderResolution 1 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -OutputMaxCount 10 -OutputPath "../media/TEST_SCENE/screenshots"
 StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, const char* const* argv)
 {
     HackOptionDef options;
@@ -180,8 +201,8 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
     }
 
     // manual change for DEBUG
-    options.enableHack = false;
-    options.storeOutput = false;
+    //options.enableHack = false;
+    //options.storeOutput = false;
     return options;
 }
 
@@ -322,8 +343,9 @@ StreamlineSample::StreamlineSample(
             };
             std::string frameIdStr = fixDigitString((frameIdx + hackOptions.outputMaxCount - 1) % hackOptions.outputMaxCount);
             std::string filename0 = hackOptions.outPath.string() + "/" +
-                hackOptions.identifier + "_frame" + frameIdStr + "A_og.png";
-            CaptureScreenshotSync(hWnd, filename0, hackOptions.StoreDelayMS);
+                hackOptions.identifier + "_frame" + frameIdStr + "A_og.jpeg";
+            //CaptureScreenshotSync(hWnd, filename0, hackOptions.StoreDelayMS);
+            CaptureHdrPhotoSync(filename0, hackOptions.StoreDelayMS);
 
             std::string filename1 = hackOptions.outPath.string() + "/" +
                 hackOptions.identifier + "_frame" + frameIdStr + "B_fg.png";
@@ -387,10 +409,13 @@ StreamlineSample::StreamlineSample(
         m_ui.GpuLoad = m_ScriptingConfig.GpuLoad;
     }
 
+    InitializeMediaCapture();
 };
 
 StreamlineSample::~StreamlineSample()
 {
+    CleanupMediaCapture();
+
     NVWrapper::Get().SetViewportHandle(m_viewport);
     NVWrapper::Get().CleanupDLSS(true);
 #ifdef STREAMLINE_FEATURE_DLSS_RR
@@ -401,6 +426,126 @@ StreamlineSample::~StreamlineSample()
     #if STREAMLINE_FEATURE_LATEWARP
     NVWrapper::Get().CleanupLatewarp(true);
 #endif
+}
+
+bool StreamlineSample::InitializeMediaCapture() {
+    if (m_mediaInitialized)
+        return true;
+
+    auto worker = [this]() -> bool {
+        try {
+            // Initialize media capture
+            m_mediaCapture = MediaCapture();
+            auto initSettings = MediaCaptureInitializationSettings();
+            initSettings.StreamingCaptureMode(StreamingCaptureMode::Video);
+
+            auto initOp = m_mediaCapture.InitializeAsync(initSettings);
+            initOp.get(); // Wait for initialization
+
+            // Check if HDR is supported
+            auto supportedModes = m_mediaCapture.VideoDeviceController().AdvancedPhotoControl().SupportedModes();
+            auto size = supportedModes.Size();
+            for (int i = 0; i < size; i++) {
+                AdvancedPhotoMode check = supportedModes.GetAt(i);
+                if (check == AdvancedPhotoMode::Hdr) {
+                    m_hdrSupported = true;
+                    break;
+                }
+            }
+            //m_mediaCapture.VideoDeviceController().AdvancedPhotoControl().SupportedModes().Contains(AdvancedPhotoMode::Hdr);
+            if (m_hdrSupported) {
+                // Configure HDR mode
+                AdvancedPhotoCaptureSettings settings;
+                settings.Mode(AdvancedPhotoMode::Hdr);
+                m_mediaCapture.VideoDeviceController().AdvancedPhotoControl().Configure(settings);
+
+                // Prepare advanced photo capture
+                auto prepareOp = m_mediaCapture.PrepareAdvancedPhotoCaptureAsync(ImageEncodingProperties::CreateJpeg());
+                m_advancedCapture = prepareOp.get();
+            }
+
+            m_mediaInitialized = true;
+            return true;
+        }
+        catch (const hresult_error& ex) {
+            log::error("MediaCapture initialization failed: %ls", ex.message().c_str());
+            return false;
+        }
+    };
+
+    // Run on thread pool and wait for result
+    auto future = std::async(std::launch::async, worker);
+    bool success = future.get();
+    m_mediaInitialized = success;
+    return success;
+}
+
+// HDR Capture function
+void StreamlineSample::CaptureHdrPhotoSync(std::string filename, const int64_t StoreDelayMS) {
+    auto captureStart = std::chrono::high_resolution_clock::now();
+
+    // Initialize media capture if not already done
+    if (!m_mediaInitialized) {
+        log::error("Failed to initialize media capture for HDR");
+        return;
+    }
+
+    if (!m_hdrSupported) {
+        log::error("HDR not supported on this device");
+        return;
+    }
+
+    try {
+        // Capture HDR photo
+        auto captureOp = m_advancedCapture.CaptureAsync();
+        auto advancedCapturedPhoto = captureOp.get();
+
+        // Save the photo
+        auto frame = advancedCapturedPhoto.Frame();
+        auto photoFile = KnownFolders::PicturesLibrary().CreateFileAsync(
+            to_hstring(filename), CreationCollisionOption::ReplaceExisting).get();
+
+        auto stream = photoFile.OpenAsync(FileAccessMode::ReadWrite).get();
+        RandomAccessStream::CopyAndCloseAsync(frame, stream).get();
+
+        // Calculate remaining time to meet minimum display duration
+        auto captureEnd = std::chrono::high_resolution_clock::now();
+        auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(
+            captureEnd - captureStart).count();
+        int64_t remainingWait = StoreDelayMS - elapsedMS;
+
+        if (remainingWait > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
+        }
+        else {
+            log::error("StoreDelayMS = %d ms set too low, taking HDR photo took %d ms",
+                StoreDelayMS, elapsedMS);
+        }
+    }
+    catch (const hresult_error& ex) {
+        log::error("HDR capture failed: %ls", ex.message().c_str());
+    }
+}
+
+// Cleanup
+void StreamlineSample::CleanupMediaCapture() {
+    if (m_advancedCapture) {
+        try {
+            auto finishOp = m_advancedCapture.FinishAsync();
+            finishOp.get();
+        }
+        catch (...) {
+            // Ignore errors during cleanup
+        }
+        m_advancedCapture = nullptr;
+    }
+
+    if (m_mediaCapture) {
+        m_mediaCapture.Close();
+        m_mediaCapture = nullptr;
+    }
+
+    m_mediaInitialized = false;
 }
 
 bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache)

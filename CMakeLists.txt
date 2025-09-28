@@ -247,6 +247,23 @@ else()
     endif()
 endif()
 
+# Add WinRT support for HDR capture
+if (MSVC)
+    # target_compile_options(StreamlineSample PRIVATE /ZW)  # Enable C++/WinRT
+    
+    # # Let Visual Studio handle the include paths automatically
+    # target_compile_options(StreamlineSample PRIVATE 
+    #     "/I\"$ENV{WindowsSdkDir}Include\""
+    #     "/AI\"$ENV{WindowsSdkDir}UnionMetadata\\$ENV{WindowsSDKVersion};C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x86\\store\\references\""
+    # )
+
+    # Add WinRT libraries
+    target_link_libraries(StreamlineSample
+        WindowsApp.lib
+        # RuntimeObject.lib
+    )
+endif()
+
 set_target_properties(StreamlineSample PROPERTIES FOLDER "Streamline Sample")
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT StreamlineSample)
 if (USE_SL)

@@ -66,6 +66,8 @@
 #include <donut/app/DeviceManager.h>
 #include <nvrhi/utils.h>
 
+#include <winrt/windows.media.capture.h>
+
 using namespace donut::math;
 using namespace donut::app;
 using namespace donut::vfs;
@@ -248,6 +250,16 @@ private:
     sl::DLSSMode                                    DLSSRR_Last_Mode = sl::DLSSMode::eOff;
     donut::math::int2                               m_DLSSRR_Last_DisplaySize = { 0,0 };
 
+    // Media capture objects
+    winrt::Windows::Media::Capture::MediaCapture m_mediaCapture{ nullptr };
+    winrt::Windows::Media::Capture::AdvancedPhotoCapture m_advancedCapture{ nullptr };
+    bool m_hdrSupported = false;
+    bool m_mediaInitialized = false;
+
+    // init and cleanup of AdvancedPhotoCapture resources
+    bool InitializeMediaCapture();
+    void CleanupMediaCapture();
+
 public:
 
 #pragma region Hack
@@ -305,6 +317,9 @@ public:
 	 * \param StoreDelayMS Need a delay to ensure successful capture of presented frame. See HackOptionDef::StoreDelayMS.
      */
     void CaptureScreenshotSync(HWND hWnd, std::string filename, const int64_t StoreDelayMS);
+
+    // New HDR capture function
+    void CaptureHdrPhotoSync(std::string filename, const int64_t StoreDelayMS);
 #pragma endregion
 
 public:
