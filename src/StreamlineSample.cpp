@@ -57,6 +57,8 @@ using namespace donut::engine;
 using namespace donut::render;
 using namespace donut::render;
 
+/// Example Usage:
+/// -EnableHack -Identifier FG_TEST -RenderResolution 1 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -OutputMaxCount 10 -OutputPath "../media/TEST_SCENE/screenshots"
 StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, const char* const* argv)
 {
     HackOptionDef options;
@@ -180,8 +182,8 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
     }
 
     // manual change for DEBUG
-    options.enableHack = false;
-    options.storeOutput = false;
+    // options.enableHack = false;
+    // options.storeOutput = false;
     return options;
 }
 
