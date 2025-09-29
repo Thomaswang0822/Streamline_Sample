@@ -85,6 +85,11 @@ freely, subject to the following restrictions:
 #include <list>
 #include <functional>
 #include <optional>
+#include <mutex>
+
+#include <d3d11.h>
+#include <wrl/client.h>
+#include <winrt/Windows.Graphics.Capture.h>
 
 namespace donut::app
 {
@@ -294,6 +299,28 @@ namespace donut::app
 
         std::vector<nvrhi::FramebufferHandle> m_SwapChainFramebuffers;
 
+#pragma region ScreenCapture
+        // Screen capture members
+        winrt::Windows::Graphics::Capture::GraphicsCaptureItem m_captureItem{ nullptr };
+        winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool m_framePool{ nullptr };
+        winrt::Windows::Graphics::Capture::GraphicsCaptureSession m_session{ nullptr };
+        winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice m_captureDevice{ nullptr };
+
+        // D3D11 device for capture (separate from your DX12 device)
+        Microsoft::WRL::ComPtr<ID3D11Device> m_d3d11CaptureDevice;
+        Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_d3d11CaptureContext;
+
+        // Other capture state
+        bool m_captureInitialized = false;
+        std::mutex m_captureMutex;
+
+        // Helper methods
+        bool CreateCaptureDevice();
+        winrt::Windows::Graphics::Capture::GraphicsCaptureItem CreateCaptureItemForWindow();
+        bool InitializeScreenCapture();
+        void CleanupScreenCapture();
+#pragma endregion
+
         DeviceManager();
 
         void UpdateWindowSize();
@@ -383,6 +410,8 @@ namespace donut::app
             std::function<void(DeviceManager&, uint32_t)> beforePresent = nullptr;
             std::function<void(DeviceManager&, uint32_t)> afterPresent = nullptr;
         } m_callbacks;
+
+        void CaptureScreenSync(const std::string& filename, int64_t storeDelayMS);
 
 #if DONUT_WITH_STREAMLINE
         static StreamlineInterface& GetStreamline();

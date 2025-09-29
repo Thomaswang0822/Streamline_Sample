@@ -60,6 +60,7 @@
 #include <winrt/Windows.Media.MediaProperties.h> // ImageEncodingProperties::CreateJpeg() impl
 #include <winrt/Windows.Storage.h>
 #include <winrt/Windows.Storage.Streams.h> // RandomAccessStream::CopyAndCloseAsync impl
+#include <winrt/Windows.Media.AppRecording.h>
 
 using namespace donut;
 using namespace donut::math;
@@ -67,13 +68,14 @@ using namespace donut::engine;
 using namespace donut::render;
 using namespace donut::render;
 
-using namespace winrt;
-using namespace Windows::Media::Capture;
-using namespace Windows::Media::Devices;
-using namespace Windows::Media::MediaProperties;
-using namespace Windows::Storage;
-using namespace Windows::Foundation;
-using namespace Windows::Storage::Streams;
+//using namespace winrt;
+using namespace winrt::Windows::Media::Capture;
+using namespace winrt::Windows::Media::Devices;
+using namespace winrt::Windows::Media::MediaProperties;
+using namespace winrt::Windows::Media::AppRecording;
+using namespace winrt::Windows::Storage;
+using namespace winrt::Windows::Foundation;
+using namespace winrt::Windows::Storage::Streams;
 
 
 /// typical usage:
@@ -346,13 +348,12 @@ StreamlineSample::StreamlineSample(
             std::string filename0 = std::filesystem::absolute(hackOptions.outPath).string() + "/" +
                 hackOptions.identifier + "_frame" + frameIdStr + "A_og.png";
             CaptureScreenshotSync(hWnd, filename0, hackOptions.StoreDelayMS);
+            m.CaptureScreenSync(filename0, hackOptions.StoreDelayMS);
+            
 
-            //CaptureHdrPhotoAsync(filename0, hackOptions.StoreDelayMS);
-            //std::this_thread::sleep_for(std::chrono::milliseconds(hackOptions.StoreDelayMS << 1));
-
-            std::string filename1 = hackOptions.outPath.string() + "/" +
-                hackOptions.identifier + "_frame" + frameIdStr + "B_fg.png";
-            CaptureScreenshotSync(hWnd, filename1, hackOptions.StoreDelayMS);
+            //std::string filename1 = hackOptions.outPath.string() + "/" +
+            //    hackOptions.identifier + "_frame" + frameIdStr + "B_fg.png";
+            //CaptureScreenshotSync(hWnd, filename1, hackOptions.StoreDelayMS);
         }
         // CaptureScreenshotSync() will handle the synchronization internally.
 
@@ -435,12 +436,12 @@ IAsyncOperation<bool> StreamlineSample::InitializeMediaCapture() {
     if (m_mediaInitialized)
         co_return true;
 
-    /// Moved to CaptureHdrPhotoAsync(): init and cleanup on fly
+    /// Moved to CaptureCameraAsync(): init and cleanup on fly
 }
 
 // HDR Capture function
-IAsyncAction StreamlineSample::CaptureHdrPhotoAsync(std::string filename, const int64_t StoreDelayMS) {
-    //std::lock_guard<std::mutex> lock(captureMutex); // Prevent concurrent access
+IAsyncAction StreamlineSample::CaptureCameraAsync(std::string filename, const int64_t StoreDelayMS) {
+    assert(false, "CaptureCameraAsync() deprecated");
     auto captureStart = std::chrono::high_resolution_clock::now();
 
     try {
@@ -470,7 +471,7 @@ IAsyncAction StreamlineSample::CaptureHdrPhotoAsync(std::string filename, const 
         m_advancedCapture = co_await m_mediaCapture.PrepareAdvancedPhotoCaptureAsync(
             ImageEncodingProperties::CreateHeif());
     }
-    catch (const hresult_error& ex) {
+    catch (const winrt::hresult_error& ex) {
         log::error("Init failed [0x%08X]: %ls", ex.code(), ex.message().c_str());
         CleanupMediaCaptureAsync();
         co_return;
@@ -488,13 +489,13 @@ IAsyncAction StreamlineSample::CaptureHdrPhotoAsync(std::string filename, const 
         // Save to file
         std::filesystem::path absolutePath = std::filesystem::absolute(hackOptions.outPath);
         auto tempFolder = co_await StorageFolder::GetFolderFromPathAsync(
-            to_hstring(absolutePath.string()));
+            winrt::to_hstring(absolutePath.string()));
         auto photoFile = co_await tempFolder.CreateFileAsync(
-            to_hstring(filename), CreationCollisionOption::ReplaceExisting);
+            winrt::to_hstring(filename), CreationCollisionOption::ReplaceExisting);
         auto stream = co_await photoFile.OpenAsync(FileAccessMode::ReadWrite);
         co_await RandomAccessStream::CopyAndCloseAsync(frame, stream);
     }
-    catch (const hresult_error& ex) {
+    catch (const winrt::hresult_error& ex) {
         log::error("Capture failed [0x%08X]: %ls", ex.code(), ex.message().c_str());
     }
 
@@ -503,6 +504,62 @@ IAsyncAction StreamlineSample::CaptureHdrPhotoAsync(std::string filename, const 
     // Handle minimum display time
     auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - captureStart).count();
+    if (int64_t remainingWait = StoreDelayMS - elapsedMS; remainingWait > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
+    }
+    else {
+        log::error("StoreDelayMS=%d too low, capture took %d ms", StoreDelayMS, elapsedMS);
+    }
+}
+
+IAsyncAction StreamlineSample::CaptureAppScreenshotAsync(std::string filename, const int64_t StoreDelayMS) {
+    auto captureStart = std::chrono::high_resolution_clock::now();
+
+    try {
+        // Get the AppRecordingManager
+        auto recordingManager = AppRecordingManager::GetDefault();
+
+        // Check if screenshot is supported
+        AppRecordingStatus status = recordingManager.GetStatus();
+        if (!status.CanRecord()) {
+            log::error("Screenshot not supported in current state");
+            co_return;
+        }
+
+        // Convert path and prepare storage
+        std::filesystem::path absolutePath = std::filesystem::absolute(hackOptions.outPath);
+        auto folder = co_await StorageFolder::GetFolderFromPathAsync(
+            winrt::to_hstring(absolutePath.string()));
+
+        // Extract filename without extension for prefix
+        std::filesystem::path filenamePath(filename);
+        std::string filenamePrefix = filenamePath.stem().string();
+
+        // Capture screenshot with HDR option
+        auto result = co_await recordingManager.SaveScreenshotToFilesAsync(
+            folder,
+            winrt::to_hstring(filenamePrefix),
+            AppRecordingSaveScreenshotOption::HdrContentVisible,
+            { winrt::to_hstring(".png") } // Request PNG format
+        );
+
+        if (result.Succeeded()) {
+            for (auto const& savedScreenshot : result.SavedScreenshotInfos()) {
+                log::info("Screenshot saved: %ls", savedScreenshot.File().Name().c_str());
+            }
+        }
+        else {
+            log::error("Screenshot capture failed");
+        }
+    }
+    catch (const winrt::hresult_error& ex) {
+        log::error("AppRecording failed [0x%08X]: %ls", ex.code(), ex.message().c_str());
+    }
+
+    // Handle minimum display time
+    auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::high_resolution_clock::now() - captureStart).count();
+
     if (int64_t remainingWait = StoreDelayMS - elapsedMS; remainingWait > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
     }

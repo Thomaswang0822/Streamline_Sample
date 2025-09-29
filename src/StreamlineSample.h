@@ -250,7 +250,7 @@ private:
     sl::DLSSMode                                    DLSSRR_Last_Mode = sl::DLSSMode::eOff;
     donut::math::int2                               m_DLSSRR_Last_DisplaySize = { 0,0 };
 
-    // Media capture objects
+#pragma region MediaCapture
     winrt::Windows::Media::Capture::MediaCapture m_mediaCapture{ nullptr };
     winrt::Windows::Media::Capture::AdvancedPhotoCapture m_advancedCapture{ nullptr };
     std::mutex captureMutex;
@@ -260,6 +260,7 @@ private:
     // init and cleanup of AdvancedPhotoCapture resources
     winrt::Windows::Foundation::IAsyncOperation<bool> InitializeMediaCapture();
     winrt::Windows::Foundation::IAsyncAction CleanupMediaCaptureAsync();
+#pragma endregion
 
 public:
 
@@ -320,12 +321,20 @@ public:
     void CaptureScreenshotSync(HWND hWnd, std::string filename, const int64_t StoreDelayMS);
 
     /**
-     * Attempt 6: Save screenshot winrt AdvancedPhotoCapture class.
+     * Attempt 6: Save screenshot with winrt AdvancedPhotoCapture class.
      * What a shame, I spent 2 days making it work, and finally realized it's media capture 
      * (i.e. taking a photo of you using the camera) instead of screen capture.
      */
     [[deprecated("NOT screen capture, deprecated")]]
-    winrt::Windows::Foundation::IAsyncAction CaptureHdrPhotoAsync(std::string filename, const int64_t StoreDelayMS);
+    winrt::Windows::Foundation::IAsyncAction CaptureCameraAsync(std::string filename, const int64_t StoreDelayMS);
+
+    /**
+     * Attempt 7: Save screenshot with winrt Windows.Media.AppRecording
+     * Unfortunately, capture is not supported in our Win32 app. It's primarily for UWP apps.
+     */
+    [[deprecated("NOT supported, deprecated")]]
+    winrt::Windows::Foundation::IAsyncAction CaptureAppScreenshotAsync(std::string filename, const int64_t StoreDelayMS);
+
 #pragma endregion
 
 public:
