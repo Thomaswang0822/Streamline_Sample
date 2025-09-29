@@ -253,12 +253,13 @@ private:
     // Media capture objects
     winrt::Windows::Media::Capture::MediaCapture m_mediaCapture{ nullptr };
     winrt::Windows::Media::Capture::AdvancedPhotoCapture m_advancedCapture{ nullptr };
+    std::mutex captureMutex;
     bool m_hdrSupported = false;
     bool m_mediaInitialized = false;
 
     // init and cleanup of AdvancedPhotoCapture resources
-    bool InitializeMediaCapture();
-    void CleanupMediaCapture();
+    winrt::Windows::Foundation::IAsyncOperation<bool> InitializeMediaCapture();
+    winrt::Windows::Foundation::IAsyncAction CleanupMediaCaptureAsync();
 
 public:
 
@@ -284,7 +285,7 @@ public:
         size_t frameCount = 0;
         // internal, each Present Callback should take 2 * StoreDelay seconds, and Present() will evenly 
         // space the display time of rendered frame and FG frame to StoreDelay
-        const static int64_t StoreDelayMS = 3500;
+        const static int64_t StoreDelayMS = 5000;
         /// internal, used for DLSS-G cold start problem
         /// @see StreamlineSample() constructor where we set afterPresent callback to see how it works
         const static uint32_t FramesToReplay = 3;
@@ -318,8 +319,13 @@ public:
      */
     void CaptureScreenshotSync(HWND hWnd, std::string filename, const int64_t StoreDelayMS);
 
-    // New HDR capture function
-    void CaptureHdrPhotoSync(std::string filename, const int64_t StoreDelayMS);
+    /**
+     * Attempt 6: Save screenshot winrt AdvancedPhotoCapture class.
+     * What a shame, I spent 2 days making it work, and finally realized it's media capture 
+     * (i.e. taking a photo of you using the camera) instead of screen capture.
+     */
+    [[deprecated("NOT screen capture, deprecated")]]
+    winrt::Windows::Foundation::IAsyncAction CaptureHdrPhotoAsync(std::string filename, const int64_t StoreDelayMS);
 #pragma endregion
 
 public:

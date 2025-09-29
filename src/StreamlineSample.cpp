@@ -342,10 +342,13 @@ StreamlineSample::StreamlineSample(
                 return std::string(length - std::to_string(fid).length(), '0') + std::to_string(fid);
             };
             std::string frameIdStr = fixDigitString((frameIdx + hackOptions.outputMaxCount - 1) % hackOptions.outputMaxCount);
-            std::string filename0 = hackOptions.outPath.string() + "/" +
-                hackOptions.identifier + "_frame" + frameIdStr + "A_og.jpeg";
-            //CaptureScreenshotSync(hWnd, filename0, hackOptions.StoreDelayMS);
-            CaptureHdrPhotoSync(filename0, hackOptions.StoreDelayMS);
+            
+            std::string filename0 = std::filesystem::absolute(hackOptions.outPath).string() + "/" +
+                hackOptions.identifier + "_frame" + frameIdStr + "A_og.png";
+            CaptureScreenshotSync(hWnd, filename0, hackOptions.StoreDelayMS);
+
+            //CaptureHdrPhotoAsync(filename0, hackOptions.StoreDelayMS);
+            //std::this_thread::sleep_for(std::chrono::milliseconds(hackOptions.StoreDelayMS << 1));
 
             std::string filename1 = hackOptions.outPath.string() + "/" +
                 hackOptions.identifier + "_frame" + frameIdStr + "B_fg.png";
@@ -409,12 +412,12 @@ StreamlineSample::StreamlineSample(
         m_ui.GpuLoad = m_ScriptingConfig.GpuLoad;
     }
 
-    InitializeMediaCapture();
+    //InitializeMediaCapture();
 };
 
 StreamlineSample::~StreamlineSample()
 {
-    CleanupMediaCapture();
+    //CleanupMediaCaptureAsync();
 
     NVWrapper::Get().SetViewportHandle(m_viewport);
     NVWrapper::Get().CleanupDLSS(true);
@@ -428,114 +431,94 @@ StreamlineSample::~StreamlineSample()
 #endif
 }
 
-bool StreamlineSample::InitializeMediaCapture() {
+IAsyncOperation<bool> StreamlineSample::InitializeMediaCapture() {
     if (m_mediaInitialized)
-        return true;
+        co_return true;
 
-    auto worker = [this]() -> bool {
-        try {
-            // Initialize media capture
-            m_mediaCapture = MediaCapture();
-            auto initSettings = MediaCaptureInitializationSettings();
-            initSettings.StreamingCaptureMode(StreamingCaptureMode::Video);
-
-            auto initOp = m_mediaCapture.InitializeAsync(initSettings);
-            initOp.get(); // Wait for initialization
-
-            // Check if HDR is supported
-            auto supportedModes = m_mediaCapture.VideoDeviceController().AdvancedPhotoControl().SupportedModes();
-            auto size = supportedModes.Size();
-            for (int i = 0; i < size; i++) {
-                AdvancedPhotoMode check = supportedModes.GetAt(i);
-                if (check == AdvancedPhotoMode::Hdr) {
-                    m_hdrSupported = true;
-                    break;
-                }
-            }
-            //m_mediaCapture.VideoDeviceController().AdvancedPhotoControl().SupportedModes().Contains(AdvancedPhotoMode::Hdr);
-            if (m_hdrSupported) {
-                // Configure HDR mode
-                AdvancedPhotoCaptureSettings settings;
-                settings.Mode(AdvancedPhotoMode::Hdr);
-                m_mediaCapture.VideoDeviceController().AdvancedPhotoControl().Configure(settings);
-
-                // Prepare advanced photo capture
-                auto prepareOp = m_mediaCapture.PrepareAdvancedPhotoCaptureAsync(ImageEncodingProperties::CreateJpeg());
-                m_advancedCapture = prepareOp.get();
-            }
-
-            m_mediaInitialized = true;
-            return true;
-        }
-        catch (const hresult_error& ex) {
-            log::error("MediaCapture initialization failed: %ls", ex.message().c_str());
-            return false;
-        }
-    };
-
-    // Run on thread pool and wait for result
-    auto future = std::async(std::launch::async, worker);
-    bool success = future.get();
-    m_mediaInitialized = success;
-    return success;
+    /// Moved to CaptureHdrPhotoAsync(): init and cleanup on fly
 }
 
 // HDR Capture function
-void StreamlineSample::CaptureHdrPhotoSync(std::string filename, const int64_t StoreDelayMS) {
+IAsyncAction StreamlineSample::CaptureHdrPhotoAsync(std::string filename, const int64_t StoreDelayMS) {
+    //std::lock_guard<std::mutex> lock(captureMutex); // Prevent concurrent access
     auto captureStart = std::chrono::high_resolution_clock::now();
 
-    // Initialize media capture if not already done
-    if (!m_mediaInitialized) {
-        log::error("Failed to initialize media capture for HDR");
-        return;
+    try {
+        // Initialize MediaCapture
+        m_mediaCapture = MediaCapture();
+        auto initSettings = MediaCaptureInitializationSettings();
+        initSettings.StreamingCaptureMode(StreamingCaptureMode::Video);
+        co_await m_mediaCapture.InitializeAsync(initSettings);
+
+        // Check HDR support
+        auto supportedModes = m_mediaCapture.VideoDeviceController().AdvancedPhotoControl().SupportedModes();
+        m_hdrSupported = false;
+        for (auto&& mode : supportedModes) {
+            if (mode == AdvancedPhotoMode::Hdr) {
+                m_hdrSupported = true;
+                break;
+            }
+        }
+
+        // Configure capture mode
+        AdvancedPhotoMode photoMode = m_hdrSupported ? AdvancedPhotoMode::Hdr : AdvancedPhotoMode::Standard;
+        AdvancedPhotoCaptureSettings settings;
+        settings.Mode(photoMode);
+        m_mediaCapture.VideoDeviceController().AdvancedPhotoControl().Configure(settings);
+
+        // Prepare capture
+        m_advancedCapture = co_await m_mediaCapture.PrepareAdvancedPhotoCaptureAsync(
+            ImageEncodingProperties::CreateHeif());
+    }
+    catch (const hresult_error& ex) {
+        log::error("Init failed [0x%08X]: %ls", ex.code(), ex.message().c_str());
+        CleanupMediaCaptureAsync();
+        co_return;
     }
 
     if (!m_hdrSupported) {
-        log::error("HDR not supported on this device");
-        return;
+        log::warning("HDR not supported, using Standard mode");
     }
 
     try {
-        // Capture HDR photo
-        auto captureOp = m_advancedCapture.CaptureAsync();
-        auto advancedCapturedPhoto = captureOp.get();
-
-        // Save the photo
+        // Capture photo
+        auto advancedCapturedPhoto = co_await m_advancedCapture.CaptureAsync();
         auto frame = advancedCapturedPhoto.Frame();
-        auto photoFile = KnownFolders::PicturesLibrary().CreateFileAsync(
-            to_hstring(filename), CreationCollisionOption::ReplaceExisting).get();
 
-        auto stream = photoFile.OpenAsync(FileAccessMode::ReadWrite).get();
-        RandomAccessStream::CopyAndCloseAsync(frame, stream).get();
-
-        // Calculate remaining time to meet minimum display duration
-        auto captureEnd = std::chrono::high_resolution_clock::now();
-        auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(
-            captureEnd - captureStart).count();
-        int64_t remainingWait = StoreDelayMS - elapsedMS;
-
-        if (remainingWait > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
-        }
-        else {
-            log::error("StoreDelayMS = %d ms set too low, taking HDR photo took %d ms",
-                StoreDelayMS, elapsedMS);
-        }
+        // Save to file
+        std::filesystem::path absolutePath = std::filesystem::absolute(hackOptions.outPath);
+        auto tempFolder = co_await StorageFolder::GetFolderFromPathAsync(
+            to_hstring(absolutePath.string()));
+        auto photoFile = co_await tempFolder.CreateFileAsync(
+            to_hstring(filename), CreationCollisionOption::ReplaceExisting);
+        auto stream = co_await photoFile.OpenAsync(FileAccessMode::ReadWrite);
+        co_await RandomAccessStream::CopyAndCloseAsync(frame, stream);
     }
     catch (const hresult_error& ex) {
-        log::error("HDR capture failed: %ls", ex.message().c_str());
+        log::error("Capture failed [0x%08X]: %ls", ex.code(), ex.message().c_str());
+    }
+
+    CleanupMediaCaptureAsync();
+
+    // Handle minimum display time
+    auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::high_resolution_clock::now() - captureStart).count();
+    if (int64_t remainingWait = StoreDelayMS - elapsedMS; remainingWait > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
+    }
+    else {
+        log::error("StoreDelayMS=%d too low, capture took %d ms", StoreDelayMS, elapsedMS);
     }
 }
 
 // Cleanup
-void StreamlineSample::CleanupMediaCapture() {
+IAsyncAction StreamlineSample::CleanupMediaCaptureAsync() {
     if (m_advancedCapture) {
         try {
-            auto finishOp = m_advancedCapture.FinishAsync();
-            finishOp.get();
+            co_await m_advancedCapture.FinishAsync();
         }
         catch (...) {
-            // Ignore errors during cleanup
+            // Suppress errors during cleanup
         }
         m_advancedCapture = nullptr;
     }
