@@ -312,7 +312,7 @@ public:
     }
 
     /**
-     * Attempt 4: Save screenshot from frontend by passing the GLFW window to Windows API.
+     * Attempt 4 (SUCCESS): Save screenshot from frontend by passing the GLFW window to Windows API.
      * Finally we find a way to save FG frames.
      * 
      * \param hWnd A Windows handle of the GLFW window get by glfwGetWin32Window() a GLFWwindow*

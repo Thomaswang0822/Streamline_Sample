@@ -265,9 +265,7 @@ int main(int __argc, const char* const* __argv)
         deviceParams.backBufferWidth = 3840;
         deviceParams.backBufferHeight = 2160;
         // disable fullscreen when debugging
-        //deviceParams.startFullscreen = true;
-        //deviceParams.swapChainFormat = nvrhi::Format::RGBA16_FLOAT;
-        //deviceParams.swapChainFormat = nvrhi::Format::R11G11B10_FLOAT;
+        deviceParams.startFullscreen = true;
         /// RGBA16_FLOAT will "disable" DLSSG, and R11G11B10_FLOAT cannot be handled by dx12.
         deviceParams.swapChainFormat = nvrhi::Format::R10G10B10A2_UNORM;
     }

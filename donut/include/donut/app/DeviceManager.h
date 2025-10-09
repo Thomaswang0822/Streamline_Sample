@@ -411,7 +411,32 @@ namespace donut::app
             std::function<void(DeviceManager&, uint32_t)> afterPresent = nullptr;
         } m_callbacks;
 
-        void CaptureScreenSync(const std::string& filename, int64_t storeDelayMS);
+        void CaptureScreenSync(const std::string& filename);
+
+        /**
+         * Attempt 8: Save screenshot with winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool
+         * Unlike attempt 4 (success) that uses BitBlit() which captures the screen "blindly", here we need
+         * to `frame = sender.TryGetNextFrame();` with a catcher logic, thus making sync more difficult.
+         * 
+         * After fixing the sync issue, it still gets a nullptr frame.
+         */
+        void CaptureScreenAsync(const std::string& filename, int64_t storeDelayMS) {
+            auto presentStart = std::chrono::high_resolution_clock::now();
+
+            // Launch the synchronous capture function on a separate thread
+            std::thread([this, filename]() {
+                CaptureScreenSync(filename);
+            }).detach(); // Detach to let it run independently
+
+            // Calculate and handle the delay in the main thread
+            auto presentEnd = std::chrono::high_resolution_clock::now();
+            auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(
+                presentEnd - presentStart).count();
+
+            if (int64_t remainingWait = storeDelayMS - elapsedMS; remainingWait > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
+            }
+        }
 
 #if DONUT_WITH_STREAMLINE
         static StreamlineInterface& GetStreamline();

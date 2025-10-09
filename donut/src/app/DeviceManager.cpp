@@ -1215,7 +1215,7 @@ bool DeviceManager::InitializeScreenCapture()
         auto size = m_captureItem.Size();
         m_framePool = winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool::Create(
             m_captureDevice,
-            winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized,
+            winrt::Windows::Graphics::DirectX::DirectXPixelFormat::R16G16B16A16Float,
             2,
             size);
     }
@@ -1278,10 +1278,8 @@ void DeviceManager::CleanupScreenCapture()
     m_captureInitialized = false;
 }
 
-void DeviceManager::CaptureScreenSync(const std::string& filename, int64_t storeDelayMS)
+void DeviceManager::CaptureScreenSync(const std::string& filename)
 {
-    auto captureStart = std::chrono::high_resolution_clock::now();
-
     if (!m_captureInitialized)
     {
         log::error("Screen capture not initialized");
@@ -1322,7 +1320,7 @@ void DeviceManager::CaptureScreenSync(const std::string& filename, int64_t store
         m_session.StartCapture();
 
         // Wait for frame with timeout (5 seconds)
-        DWORD waitResult = WaitForSingleObject(frameEvent, 5000);
+        DWORD waitResult = WaitForSingleObject(frameEvent, 15000);
         if (waitResult != WAIT_OBJECT_0)
         {
             if (waitResult == WAIT_TIMEOUT)
@@ -1411,17 +1409,6 @@ void DeviceManager::CaptureScreenSync(const std::string& filename, int64_t store
     // Stop capture
     m_session.Close();
 
-    // Handle minimum display time
-    auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::high_resolution_clock::now() - captureStart).count();
-
-    if (int64_t remainingWait = storeDelayMS - elapsedMS; remainingWait > 0)
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
-    }
-    else
-    {
-        log::error("StoreDelayMS=%d too low, capture took %d ms", storeDelayMS, elapsedMS);
-    }
+    // This is the sync helper, sleep delay is handled in the aysnc caller.
 }
 

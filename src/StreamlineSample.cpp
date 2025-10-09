@@ -348,12 +348,11 @@ StreamlineSample::StreamlineSample(
             std::string filename0 = std::filesystem::absolute(hackOptions.outPath).string() + "/" +
                 hackOptions.identifier + "_frame" + frameIdStr + "A_og.png";
             CaptureScreenshotSync(hWnd, filename0, hackOptions.StoreDelayMS);
-            m.CaptureScreenSync(filename0, hackOptions.StoreDelayMS);
             
 
-            //std::string filename1 = hackOptions.outPath.string() + "/" +
-            //    hackOptions.identifier + "_frame" + frameIdStr + "B_fg.png";
-            //CaptureScreenshotSync(hWnd, filename1, hackOptions.StoreDelayMS);
+            std::string filename1 = hackOptions.outPath.string() + "/" +
+                hackOptions.identifier + "_frame" + frameIdStr + "B_fg.png";
+            CaptureScreenshotSync(hWnd, filename1, hackOptions.StoreDelayMS);
         }
         // CaptureScreenshotSync() will handle the synchronization internally.
 
