@@ -62,20 +62,34 @@
 #include <winrt/Windows.Storage.Streams.h> // RandomAccessStream::CopyAndCloseAsync impl
 #include <winrt/Windows.Media.AppRecording.h>
 
+#include <winrt/Windows.Graphics.Capture.h>
+#include <Windows.Graphics.Capture.Interop.h>
+#include <Windows.Graphics.Directx.Direct3d11.Interop.h>
+
+#include <wrl.h> // ComPtr<ID3D11Device> impl
+
+#include <wil/resource.h> // wil::shared_event
+
+#include <tinyexr.h>
+
 using namespace donut;
 using namespace donut::math;
 using namespace donut::engine;
 using namespace donut::render;
-using namespace donut::render;
 
-//using namespace winrt;
+//using namespace winrt; // cause ambiguity
 using namespace winrt::Windows::Media::Capture;
 using namespace winrt::Windows::Media::Devices;
 using namespace winrt::Windows::Media::MediaProperties;
 using namespace winrt::Windows::Media::AppRecording;
 using namespace winrt::Windows::Storage;
-using namespace winrt::Windows::Foundation;
+//using namespace winrt::Windows::Foundation; // cause ambiguity
+namespace winrt_foundation = winrt::Windows::Foundation;
 using namespace winrt::Windows::Storage::Streams;
+using namespace winrt::Windows::Graphics::Capture;
+using namespace winrt::Windows::Graphics::DirectX;
+using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
+using namespace Microsoft::WRL;
 
 
 /// typical usage:
@@ -208,6 +222,221 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
     return options;
 }
 
+bool StreamlineSample::CreateCaptureDevice()
+{
+    // Create D3D11 device and Convert it step-by-step to WinRT IDirect3DDevice
+    ComPtr<ID3D11Device> device;
+    HRESULT hr = D3D11CreateDevice(
+        nullptr,
+        D3D_DRIVER_TYPE_HARDWARE,
+        nullptr,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        nullptr,  // D3D_FEATURE_LEVEL*
+        0, // above array size
+        D3D11_SDK_VERSION,
+        &device,
+        nullptr,
+        nullptr // ID3D11DeviceContext*
+    );
+
+    if (FAILED(hr))
+    {
+        log::error("Failed to create D3D11 device: 0x%08X", hr);
+        return false;
+    }
+
+    ComPtr<IDXGIDevice> dxgiDevice;
+    hr = device.As(&dxgiDevice);
+    if (FAILED(hr))
+    {
+        log::error("Failed to convert ID3D11Device to IDXGIDevice: 0x%08X", hr);
+        return false;
+    }
+
+    winrt::com_ptr<IInspectable> inspectableDevice;
+    hr = CreateDirect3D11DeviceFromDXGIDevice(dxgiDevice.Get(), inspectableDevice.put());
+    if (FAILED(hr))
+    {
+        log::error("Failed to create WinRT device from DXGI device: 0x%08X", hr);
+        return false;
+    }
+
+    m_captureDevice = inspectableDevice.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
+
+    return true;
+}
+
+bool StreamlineSample::CreateCaptureItemForWindow()
+{
+    auto window_ptr = GetDeviceManager()->GetWindow();
+    if (window_ptr == nullptr)
+    {
+        log::error("No GLFW window set");
+        return false;
+    }
+    HWND hwnd = glfwGetWin32Window(window_ptr);
+    if (hwnd == nullptr)
+    {
+        log::error("Can't get HWND from GLFW window");
+        return false;
+    }
+    // Use interop interface to create capture item
+    auto interop = winrt::get_activation_factory<winrt::Windows::Graphics::Capture::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
+    winrt::check_hresult(interop->CreateForWindow(
+        hwnd,
+        winrt::guid_of<ABI::Windows::Graphics::Capture::IGraphicsCaptureItem>(),
+        reinterpret_cast<void**>(winrt::put_abi(m_captureItem))
+    ));
+    return true;
+}
+
+bool StreamlineSample::InitializeFramePoolCapture()
+{
+    // 1. Create D3D11 device
+    if (!CreateCaptureDevice() || m_captureDevice == nullptr)
+    {
+        log::error("Failed to create capture device");
+        return false;
+    }
+
+    // 2. Create capture item
+    if (!CreateCaptureItemForWindow() || m_captureItem == nullptr)
+    {
+        log::error("Failed to create capture item");
+        return false;
+    }
+
+    m_captureInitialized = true;
+    return true;
+}
+
+void StreamlineSample::CleanupFramePoolCapture()
+{
+    m_captureItem = nullptr;
+    m_captureDevice = nullptr;
+    m_captureInitialized = false;
+}
+
+/**
+ * Helper to convert Windows::Graphics::DirectX::Direct3D11 resources to native D3D11 resources
+ * 
+ * \param object: We will use IDirect3DDevice and IDirect3DSurface as inputs
+ */
+template<typename T>
+static winrt::com_ptr<T> GetDXGIInterfaceFromObject(winrt::Windows::Foundation::IInspectable const& object)
+{
+    // Cast to the interface access type
+    auto access = object.as<Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+
+    // Get the requested interface
+    winrt::com_ptr<T> result;
+    winrt::check_hresult(access->GetInterface(winrt::guid_of<T>(), result.put_void()));
+    return result;
+}
+
+bool StreamlineSample::SaveTextureToEXR(winrt::com_ptr<ID3D11Device> device, winrt::com_ptr<ID3D11Texture2D> texture, const std::string filename)
+{
+    // Create staging texture
+    D3D11_TEXTURE2D_DESC desc;
+    texture->GetDesc(&desc);
+    const int width = desc.Width;
+    const int height = desc.Height;
+    const size_t bytesPerPixel = 4 * 2; // RGBA16_FLOAT
+    //const size_t rowPitchBytes = width * bytesPerPixel;
+
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = 0;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    desc.MiscFlags = 0;
+
+    winrt::com_ptr<ID3D11Texture2D> stagingTexture;
+    HRESULT hr = device->CreateTexture2D(&desc, nullptr, stagingTexture.put());
+    if (FAILED(hr))
+    {
+        log::error("Failed to create staging texture: 0x%08X", hr);
+        return false;
+    }
+
+    // Copy to staging texture
+    winrt::com_ptr<ID3D11DeviceContext> context;
+    device->GetImmediateContext(context.put());
+    context->CopyResource(stagingTexture.get(), texture.get());
+
+    // Map the staging texture
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    hr = context->Map(stagingTexture.get(), 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(hr))
+    {
+        log::error("Failed to map staging texture: 0x%08X", hr);
+        return false;
+    }
+
+    SaveStagingTextureDataToEXR(mapped.pData, mapped.RowPitch, width, height, filename);
+
+    context->Unmap(stagingTexture.get(), 0);
+    return true;
+}
+
+
+void StreamlineSample::CaptureFramePoolHDR(const std::string filename, const int64_t StoreDelayMS)
+{
+    auto captureStart = std::chrono::high_resolution_clock::now();
+
+    // Grab the apartment context so we can return to it.
+    winrt::apartment_context context;
+
+    auto d3dDevice = GetDXGIInterfaceFromObject<ID3D11Device>(m_captureDevice);
+    winrt::com_ptr<ID3D11DeviceContext> d3dContext;
+    d3dDevice->GetImmediateContext(d3dContext.put());
+
+    // Creating our frame pool with CreateFreeThreaded means that we 
+    // will be called back from the frame pool's internal worker thread
+    // instead of the thread we are currently on. It also disables the
+    // DispatcherQueue requirement.
+    auto framePool = Direct3D11CaptureFramePool::CreateFreeThreaded(
+        m_captureDevice,
+        DirectXPixelFormat::R16G16B16A16Float,
+        1,
+        m_captureItem.Size());
+    auto session = framePool.CreateCaptureSession(m_captureItem);
+
+    wil::shared_event captureEvent(wil::EventOptions::ManualReset);
+    Direct3D11CaptureFrame frame{ nullptr };
+    framePool.FrameArrived([&frame, captureEvent](auto& framePool, auto&)
+        {
+            frame = framePool.TryGetNextFrame();
+
+            // Complete the operation
+            captureEvent.SetEvent();
+        });
+
+    session.StartCapture();
+    // sync wait
+    captureEvent.wait();
+
+    // End the capture
+    session.Close();
+    framePool.Close();
+
+    auto texture = GetDXGIInterfaceFromObject<ID3D11Texture2D>(frame.Surface());
+    assert(texture != nullptr);
+    SaveTextureToEXR(d3dDevice, texture, filename);
+
+    // Calculate remaining time to meet minimum display duration
+    auto captureEnd = std::chrono::high_resolution_clock::now();
+    auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(captureEnd - captureStart).count();
+    int64_t remainingWait = StoreDelayMS - elapsedMS;
+    if (remainingWait > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
+    }
+    else {
+        log::error("StoreDelayMS = %d ms set too low, taking screenshot took %d ms", StoreDelayMS, elapsedMS);
+    }
+
+    return;
+
+}
+
 // Constructor
 StreamlineSample::StreamlineSample(
     DeviceManager* deviceManager,
@@ -292,6 +521,10 @@ StreamlineSample::StreamlineSample(
     else
         SetCurrentSceneName("/native/" + sceneName);
 
+    if (!InitializeFramePoolCapture()) {
+        log::error("Init FramePool resources failed");
+    }
+
 #ifdef STREAMLINE_FEATURE_DLSS_RR
     if(GetDevice()->getGraphicsAPI() != nvrhi::GraphicsAPI::D3D11)
     {   
@@ -330,7 +563,7 @@ StreamlineSample::StreamlineSample(
         /// BUT NOTE: we have to waste time saving those cold frames, otherwise super uneven present time,
         /// e.g. 60 fps vs 6s per frame will lead to wrong captured frame.
         /// 
-        /// Also, when calling CaptureScreenshotSync() at frame t, frame t-1 is what's being
+        /// Also, when calling CaptureBitBlitLDR() at frame t, frame t-1 is what's being
         /// Presnet() and captured, probably because Present() is async.
         /// Thus, we adjust the filename accordingly.
         if (hackOptions.enableHack && hackOptions.storeOutput && // should store
@@ -346,15 +579,18 @@ StreamlineSample::StreamlineSample(
             std::string frameIdStr = fixDigitString((frameIdx + hackOptions.outputMaxCount - 1) % hackOptions.outputMaxCount);
             
             std::string filename0 = std::filesystem::absolute(hackOptions.outPath).string() + "/" +
-                hackOptions.identifier + "_frame" + frameIdStr + "A_og.png";
-            CaptureScreenshotSync(hWnd, filename0, hackOptions.StoreDelayMS);
+                hackOptions.identifier + "_frame" + frameIdStr + "A_og.exr";
+            //CaptureBitBlitLDR(hWnd, filename0, hackOptions.StoreDelayMS);
+            CaptureFramePoolHDR(filename0, hackOptions.StoreDelayMS);
             
 
             std::string filename1 = hackOptions.outPath.string() + "/" +
-                hackOptions.identifier + "_frame" + frameIdStr + "B_fg.png";
-            CaptureScreenshotSync(hWnd, filename1, hackOptions.StoreDelayMS);
+                hackOptions.identifier + "_frame" + frameIdStr + "B_fg.exr";
+            //CaptureBitBlitLDR(hWnd, filename1, hackOptions.StoreDelayMS);
+            CaptureFramePoolHDR(filename1, hackOptions.StoreDelayMS);
+
         }
-        // CaptureScreenshotSync() will handle the synchronization internally.
+        // CaptureBitBlitLDR() will handle the synchronization internally.
 
         NVWrapper::Get().ReflexCallback_PresentEnd(m, frameIdx); 
     };
@@ -418,6 +654,7 @@ StreamlineSample::StreamlineSample(
 StreamlineSample::~StreamlineSample()
 {
     //CleanupMediaCaptureAsync();
+    CleanupFramePoolCapture();
 
     NVWrapper::Get().SetViewportHandle(m_viewport);
     NVWrapper::Get().CleanupDLSS(true);
@@ -431,16 +668,8 @@ StreamlineSample::~StreamlineSample()
 #endif
 }
 
-IAsyncOperation<bool> StreamlineSample::InitializeMediaCapture() {
-    if (m_mediaInitialized)
-        co_return true;
-
-    /// Moved to CaptureCameraAsync(): init and cleanup on fly
-}
-
-// HDR Capture function
-IAsyncAction StreamlineSample::CaptureCameraAsync(std::string filename, const int64_t StoreDelayMS) {
-    assert(false, "CaptureCameraAsync() deprecated");
+winrt_foundation::IAsyncAction StreamlineSample::CaptureMediaAsync(std::string filename, const int64_t StoreDelayMS) {
+    assert(false, "CaptureMediaAsync() deprecated");
     auto captureStart = std::chrono::high_resolution_clock::now();
 
     try {
@@ -511,7 +740,7 @@ IAsyncAction StreamlineSample::CaptureCameraAsync(std::string filename, const in
     }
 }
 
-IAsyncAction StreamlineSample::CaptureAppScreenshotAsync(std::string filename, const int64_t StoreDelayMS) {
+winrt_foundation::IAsyncAction StreamlineSample::CaptureAppRecordingAsync(std::string filename, const int64_t StoreDelayMS) {
     auto captureStart = std::chrono::high_resolution_clock::now();
 
     try {
@@ -568,7 +797,7 @@ IAsyncAction StreamlineSample::CaptureAppScreenshotAsync(std::string filename, c
 }
 
 // Cleanup
-IAsyncAction StreamlineSample::CleanupMediaCaptureAsync() {
+winrt_foundation::IAsyncAction StreamlineSample::CleanupMediaCaptureAsync() {
     if (m_advancedCapture) {
         try {
             co_await m_advancedCapture.FinishAsync();
@@ -583,8 +812,6 @@ IAsyncAction StreamlineSample::CleanupMediaCaptureAsync() {
         m_mediaCapture.Close();
         m_mediaCapture = nullptr;
     }
-
-    m_mediaInitialized = false;
 }
 
 bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache)
@@ -645,7 +872,7 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
     return true;
 }
 
-void StreamlineSample::CaptureScreenshotSync(HWND hWnd, std::string filename, const int64_t StoreDelayMS) {
+void StreamlineSample::CaptureBitBlitLDR(HWND hWnd, std::string filename, const int64_t StoreDelayMS) {
     auto captureStart = std::chrono::high_resolution_clock::now();
 
     // Get window dimensions with DPI awareness

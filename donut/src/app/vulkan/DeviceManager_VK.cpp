@@ -51,6 +51,8 @@ freely, subject to the following restrictions:
 #include <queue>
 #include <unordered_set>
 #include <memory>
+#include <iostream>
+#include <sstream>
 
 #include <donut/app/DeviceManager.h>
 #include <donut/app/DeviceManager_VK.h>

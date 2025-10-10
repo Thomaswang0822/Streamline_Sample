@@ -85,11 +85,6 @@ freely, subject to the following restrictions:
 #include <list>
 #include <functional>
 #include <optional>
-#include <mutex>
-
-#include <d3d11.h>
-#include <wrl/client.h>
-#include <winrt/Windows.Graphics.Capture.h>
 
 namespace donut::app
 {
@@ -299,28 +294,6 @@ namespace donut::app
 
         std::vector<nvrhi::FramebufferHandle> m_SwapChainFramebuffers;
 
-#pragma region ScreenCapture
-        // Screen capture members
-        winrt::Windows::Graphics::Capture::GraphicsCaptureItem m_captureItem{ nullptr };
-        winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool m_framePool{ nullptr };
-        winrt::Windows::Graphics::Capture::GraphicsCaptureSession m_session{ nullptr };
-        winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice m_captureDevice{ nullptr };
-
-        // D3D11 device for capture (separate from your DX12 device)
-        Microsoft::WRL::ComPtr<ID3D11Device> m_d3d11CaptureDevice;
-        Microsoft::WRL::ComPtr<ID3D11DeviceContext> m_d3d11CaptureContext;
-
-        // Other capture state
-        bool m_captureInitialized = false;
-        std::mutex m_captureMutex;
-
-        // Helper methods
-        bool CreateCaptureDevice();
-        winrt::Windows::Graphics::Capture::GraphicsCaptureItem CreateCaptureItemForWindow();
-        bool InitializeScreenCapture();
-        void CleanupScreenCapture();
-#pragma endregion
-
         DeviceManager();
 
         void UpdateWindowSize();
@@ -410,34 +383,7 @@ namespace donut::app
             std::function<void(DeviceManager&, uint32_t)> beforePresent = nullptr;
             std::function<void(DeviceManager&, uint32_t)> afterPresent = nullptr;
         } m_callbacks;
-
-        void CaptureScreenSync(const std::string& filename);
-
-        /**
-         * Attempt 8: Save screenshot with winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool
-         * Unlike attempt 4 (success) that uses BitBlit() which captures the screen "blindly", here we need
-         * to `frame = sender.TryGetNextFrame();` with a catcher logic, thus making sync more difficult.
-         * 
-         * After fixing the sync issue, it still gets a nullptr frame.
-         */
-        void CaptureScreenAsync(const std::string& filename, int64_t storeDelayMS) {
-            auto presentStart = std::chrono::high_resolution_clock::now();
-
-            // Launch the synchronous capture function on a separate thread
-            std::thread([this, filename]() {
-                CaptureScreenSync(filename);
-            }).detach(); // Detach to let it run independently
-
-            // Calculate and handle the delay in the main thread
-            auto presentEnd = std::chrono::high_resolution_clock::now();
-            auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(
-                presentEnd - presentStart).count();
-
-            if (int64_t remainingWait = storeDelayMS - elapsedMS; remainingWait > 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
-            }
-        }
-
+        
 #if DONUT_WITH_STREAMLINE
         static StreamlineInterface& GetStreamline();
 #endif

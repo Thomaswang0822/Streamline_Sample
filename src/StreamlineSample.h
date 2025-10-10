@@ -67,6 +67,7 @@
 #include <nvrhi/utils.h>
 
 #include <winrt/windows.media.capture.h>
+#include <winrt/Windows.Graphics.Capture.h>
 
 using namespace donut::math;
 using namespace donut::app;
@@ -250,16 +251,36 @@ private:
     sl::DLSSMode                                    DLSSRR_Last_Mode = sl::DLSSMode::eOff;
     donut::math::int2                               m_DLSSRR_Last_DisplaySize = { 0,0 };
 
-#pragma region MediaCapture
+    // see Attempt 6
+#pragma region MediaCapture 
     winrt::Windows::Media::Capture::MediaCapture m_mediaCapture{ nullptr };
     winrt::Windows::Media::Capture::AdvancedPhotoCapture m_advancedCapture{ nullptr };
-    std::mutex captureMutex;
     bool m_hdrSupported = false;
-    bool m_mediaInitialized = false;
 
-    // init and cleanup of AdvancedPhotoCapture resources
-    winrt::Windows::Foundation::IAsyncOperation<bool> InitializeMediaCapture();
     winrt::Windows::Foundation::IAsyncAction CleanupMediaCaptureAsync();
+#pragma endregion
+
+    // see Attempt 8
+#pragma region FramePoolCapture
+    winrt::Windows::Graphics::Capture::GraphicsCaptureItem m_captureItem{ nullptr };
+    winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice m_captureDevice{ nullptr };
+    bool m_captureInitialized = false;
+
+    bool CreateCaptureDevice();
+    bool CreateCaptureItemForWindow();
+    /// calls CreateCaptureDevice() and CreateCaptureItemForWindow()
+    bool InitializeFramePoolCapture();
+    void CleanupFramePoolCapture();
+
+    /**
+     * It does 2 things: 
+     * 1) map the given ID3D11Texture2D to a staging texture (D3D11_MAPPED_SUBRESOURCE).
+     * 2) call SaveStagingTextureDataToEXR() in TextureCache.h to save exr file using tinyexr.
+     */
+    bool SaveTextureToEXR(
+        winrt::com_ptr<ID3D11Device> device,
+        winrt::com_ptr<ID3D11Texture2D> texture,
+        const std::string filename);
 #pragma endregion
 
 public:
@@ -318,22 +339,31 @@ public:
      * \param hWnd A Windows handle of the GLFW window get by glfwGetWin32Window() a GLFWwindow*
 	 * \param StoreDelayMS Need a delay to ensure successful capture of presented frame. See HackOptionDef::StoreDelayMS.
      */
-    void CaptureScreenshotSync(HWND hWnd, std::string filename, const int64_t StoreDelayMS);
+    void CaptureBitBlitLDR(HWND hWnd, std::string filename, const int64_t StoreDelayMS);
 
     /**
-     * Attempt 6: Save screenshot with winrt AdvancedPhotoCapture class.
-     * What a shame, I spent 2 days making it work, and finally realized it's media capture 
+     * Attempt 6: Save screenshot with winrt AdvancedPhotoCapture class?
+     * No, I spent 2 days making it work, and finally realized it's media capture 
      * (i.e. taking a photo of you using the camera) instead of screen capture.
      */
     [[deprecated("NOT screen capture, deprecated")]]
-    winrt::Windows::Foundation::IAsyncAction CaptureCameraAsync(std::string filename, const int64_t StoreDelayMS);
+    winrt::Windows::Foundation::IAsyncAction CaptureMediaAsync(std::string filename, const int64_t StoreDelayMS);
 
     /**
      * Attempt 7: Save screenshot with winrt Windows.Media.AppRecording
      * Unfortunately, capture is not supported in our Win32 app. It's primarily for UWP apps.
      */
     [[deprecated("NOT supported, deprecated")]]
-    winrt::Windows::Foundation::IAsyncAction CaptureAppScreenshotAsync(std::string filename, const int64_t StoreDelayMS);
+    winrt::Windows::Foundation::IAsyncAction CaptureAppRecordingAsync(std::string filename, const int64_t StoreDelayMS);
+
+    /**
+     * Attempt 8 (SUCCESS): Capture with winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool
+     * Unlike attempt 4 (success) that uses BitBlit() which captures the LDR screen,
+     * here we get a Direct3D11CaptureFrame that supports RGBA16_FLOAT HDR format.
+     *  
+     * We install Windows Implementation Library (wil) and use wil::shared_event to handle FrameArrived()
+     */
+    void CaptureFramePoolHDR(const std::string filename, const int64_t StoreDelayMS);
 
 #pragma endregion
 

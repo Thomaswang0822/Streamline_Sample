@@ -73,20 +73,7 @@ freely, subject to the following restrictions:
 #include <ShellScalingApi.h>
 #pragma comment(lib, "shcore.lib")
 #endif
-#include <donut/engine/TextureCache.h>
-
-#include <Windows.Graphics.Capture.Interop.h> // 用于从 HWND 创建捕获项
-#include <d3d11.h>
-#include <dxgi1_2.h>
-#include <wrl.h>
-#include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
-#include <winrt/Windows.Graphics.Capture.h>
-#include <Windows.Graphics.Capture.Interop.h>
-#include <windows.graphics.directx.direct3d11.interop.h>
-#include <winrt/Windows.Foundation.h>
-#include <winrt/Windows.Storage.h>
-
-#include <stb_image_write.h>
+#include <donut/engine/TextureCache.h> // for Attempt 1 & 2
 
 #if defined(_WINDOWS) && DONUT_FORCE_DISCRETE_GPU
 extern "C"
@@ -99,14 +86,6 @@ extern "C"
 #endif
 
 using namespace donut::app;
-
-using namespace Microsoft::WRL;
-//using namespace winrt::Windows::Foundation;
-using namespace winrt::Windows::Storage;
-using namespace winrt::Windows::Graphics::Capture;
-using namespace winrt::Windows::Graphics::DirectX;
-using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
-
 
 // The joystick interface in glfw is not per-window like the keys, mouse, etc. The joystick callbacks
 // don't take a window arg. So glfw's model is a global joystick shared by all windows. Hence, the equivalent 
@@ -400,13 +379,6 @@ bool DeviceManager::CreateWindowDeviceAndSwapChain(const DeviceCreationParameter
     if (m_DeviceParams.startMaximized)
     {
         glfwMaximizeWindow(m_Window);
-    }
-
-    // After window is created and device is initialized
-    if (!InitializeScreenCapture())
-    {
-        log::warning("Screen capture initialization failed");
-        // Don't return false here - capture is optional
     }
 
     // do not resize to GLFW window size if hack
@@ -962,8 +934,6 @@ void DeviceManager::Shutdown()
     StreamlineIntegration::Get().Shutdown();
 #endif
 
-    CleanupScreenCapture();
-
     m_SwapChainFramebuffers.clear();
 
     DestroyDeviceAndSwapChain();
@@ -1101,314 +1071,9 @@ StreamlineInterface& DeviceManager::GetStreamline()
 }
 #endif
 
-bool DeviceManager::CreateCaptureDevice()
-{
-    // Create D3D11 device
-    ComPtr<ID3D11Device> device;
-    ComPtr<ID3D11DeviceContext> context;
 
-    D3D_FEATURE_LEVEL featureLevels[] = {
-        D3D_FEATURE_LEVEL_11_1,
-        D3D_FEATURE_LEVEL_11_0,
-        D3D_FEATURE_LEVEL_10_1,
-        D3D_FEATURE_LEVEL_10_0,
-        D3D_FEATURE_LEVEL_9_3,
-        D3D_FEATURE_LEVEL_9_2,
-        D3D_FEATURE_LEVEL_9_1
-    };
 
-    HRESULT hr = D3D11CreateDevice(
-        nullptr,
-        D3D_DRIVER_TYPE_HARDWARE,
-        nullptr,
-        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-        featureLevels,
-        ARRAYSIZE(featureLevels),
-        D3D11_SDK_VERSION,
-        &device,
-        nullptr,
-        &context
-    );
 
-    if (FAILED(hr))
-    {
-        log::error("Failed to create D3D11 device: 0x%08X", hr);
-        return false;
-    }
 
-    // Convert ID3D11Device to WinRT IDirect3DDevice
-    ComPtr<IDXGIDevice> dxgiDevice;
-    hr = device.As(&dxgiDevice);
-    if (FAILED(hr))
-    {
-        log::error("Failed to get DXGI device: 0x%08X", hr);
-        return false;
-    }
 
-    // Create WinRT device from DXGI device
-    winrt::com_ptr<IInspectable> inspectableDevice;
-    hr = CreateDirect3D11DeviceFromDXGIDevice(dxgiDevice.Get(), inspectableDevice.put());
-    if (FAILED(hr))
-    {
-        log::error("Failed to create WinRT device from DXGI device: 0x%08X", hr);
-        return false;
-    }
-
-    m_captureDevice = inspectableDevice.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
-    m_d3d11CaptureDevice = device;
-    m_d3d11CaptureContext = context;
-
-    return true;
-}
-
-GraphicsCaptureItem DeviceManager::CreateCaptureItemForWindow()
-{
-    HWND hwnd = glfwGetWin32Window(m_Window);
-    // Use interop interface to create capture item
-    auto interop = winrt::get_activation_factory<winrt::Windows::Graphics::Capture::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
-    winrt::Windows::Graphics::Capture::GraphicsCaptureItem item = nullptr;
-    winrt::check_hresult(interop->CreateForWindow(
-        hwnd,
-        winrt::guid_of<ABI::Windows::Graphics::Capture::IGraphicsCaptureItem>(),
-        reinterpret_cast<void**>(winrt::put_abi(item))
-    ));
-    return item;
-}
-
-bool DeviceManager::InitializeScreenCapture()
-{
-    std::lock_guard<std::mutex> lock(m_captureMutex);
-
-    // 1. Create D3D11 device
-    if (!CreateCaptureDevice())
-    {
-        log::error("Failed to create capture device");
-        return false;
-    }
-
-    // 2. Get window handle from GLFW
-    if (m_Window == nullptr)
-    {
-        log::error("No GLFW window set");
-        return false;
-    }
-
-    // 3. Create capture item
-    try
-    {
-        m_captureItem = CreateCaptureItemForWindow();
-        if (m_captureItem == nullptr)
-        {
-            log::error("Failed to create capture item");
-            return false;
-        }
-    }
-    catch (const winrt::hresult_error& ex)
-    {
-        log::error("Failed to create capture item: %ls", ex.message().c_str());
-        return false;
-    }
-
-    // 4. Create frame pool
-    try
-    {
-        auto size = m_captureItem.Size();
-        m_framePool = winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool::Create(
-            m_captureDevice,
-            winrt::Windows::Graphics::DirectX::DirectXPixelFormat::R16G16B16A16Float,
-            2,
-            size);
-    }
-    catch (const winrt::hresult_error& ex)
-    {
-        log::error("Failed to create frame pool: %ls", ex.message().c_str());
-        return false;
-    }
-
-    // 5. Create session
-    try
-    {
-        m_session = m_framePool.CreateCaptureSession(m_captureItem);
-        m_session.IsCursorCaptureEnabled(false);
-    }
-    catch (const winrt::hresult_error& ex)
-    {
-        log::error("Failed to create capture session: %ls", ex.message().c_str());
-        return false;
-    }
-
-    m_captureInitialized = true;
-    return true;
-}
-
-void DeviceManager::CleanupScreenCapture()
-{
-    std::lock_guard<std::mutex> lock(m_captureMutex);
-
-    if (m_session)
-    {
-        try
-        {
-            m_session.Close();
-        }
-        catch (const winrt::hresult_error& ex)
-        {
-            log::error("Failed to close capture session: %ls", ex.message().c_str());
-        }
-        m_session = nullptr;
-    }
-
-    if (m_framePool)
-    {
-        try
-        {
-            m_framePool.Close();
-        }
-        catch (const winrt::hresult_error& ex)
-        {
-            log::error("Failed to close frame pool: %ls", ex.message().c_str());
-        }
-        m_framePool = nullptr;
-    }
-
-    m_captureItem = nullptr;
-    m_captureDevice = nullptr;
-    m_d3d11CaptureDevice = nullptr;
-    m_d3d11CaptureContext = nullptr;
-    m_captureInitialized = false;
-}
-
-void DeviceManager::CaptureScreenSync(const std::string& filename)
-{
-    if (!m_captureInitialized)
-    {
-        log::error("Screen capture not initialized");
-        return;
-    }
-
-    // Create manual-reset event using Win32 API
-    HANDLE frameEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
-    if (frameEvent == nullptr)
-    {
-        log::error("Failed to create event: %d", GetLastError());
-        return;
-    }
-
-    // Use RAII with custom deleter for event handle
-    auto eventDeleter = [](HANDLE h) { if (h) CloseHandle(h); };
-    std::unique_ptr<void, decltype(eventDeleter)> eventGuard(frameEvent, eventDeleter);
-
-    winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame frame{ nullptr };
-
-    // Register event handler for frame arrival
-    auto frameArrivedToken = m_framePool.FrameArrived([&frame, frameEvent](
-        winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool const& sender,
-        winrt::Windows::Foundation::IInspectable const& args)
-        {
-            frame = sender.TryGetNextFrame();
-            SetEvent(frameEvent);
-        });
-
-    // Use a custom scope guard to ensure we clean up the event handler
-    auto frameHandlerGuard = [&]() {
-        m_framePool.FrameArrived(frameArrivedToken);
-        };
-
-    try
-    {
-        // Start capture
-        m_session.StartCapture();
-
-        // Wait for frame with timeout (5 seconds)
-        DWORD waitResult = WaitForSingleObject(frameEvent, 15000);
-        if (waitResult != WAIT_OBJECT_0)
-        {
-            if (waitResult == WAIT_TIMEOUT)
-            {
-                log::error("Frame capture timeout");
-            }
-            else
-            {
-                log::error("Frame capture error: %d", GetLastError());
-            }
-            frameHandlerGuard(); // Clean up before returning
-            return;
-        }
-
-        if (frame == nullptr)
-        {
-            log::error("Failed to get capture frame");
-            frameHandlerGuard(); // Clean up before returning
-            return;
-        }
-
-        // Process the frame (same as before)
-        auto surface = frame.Surface();
-        auto device = m_d3d11CaptureDevice;
-        auto context = m_d3d11CaptureContext;
-
-        // Create staging texture
-        D3D11_TEXTURE2D_DESC desc;
-        surface.as<ID3D11Texture2D>()->GetDesc(&desc);
-
-        desc.Usage = D3D11_USAGE_STAGING;
-        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        desc.BindFlags = 0;
-
-        ComPtr<ID3D11Texture2D> stagingTexture;
-        HRESULT hr = device->CreateTexture2D(&desc, nullptr, &stagingTexture);
-        if (FAILED(hr))
-        {
-            log::error("Failed to create staging texture: 0x%08X", hr);
-            frameHandlerGuard(); // Clean up before returning
-            return;
-        }
-
-        // Copy to staging texture
-        context->CopyResource(stagingTexture.Get(), surface.as<ID3D11Texture2D>().get());
-
-        // Map for CPU access
-        D3D11_MAPPED_SUBRESOURCE mapped;
-        hr = context->Map(stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
-        if (FAILED(hr))
-        {
-            log::error("Failed to map staging texture: 0x%08X", hr);
-            frameHandlerGuard(); // Clean up before returning
-            return;
-        }
-
-        // Convert BGRA to RGB and save with stb_image
-        const int width = desc.Width;
-        const int height = desc.Height;
-        const int pixelCount = width * height;
-        std::vector<uint8_t> pixels(width * height * 3);
-
-        const uint8_t* bgraData = static_cast<const uint8_t*>(mapped.pData);
-        for (int i = 0; i < pixelCount; i++)
-        {
-            pixels[i * 3 + 0] = bgraData[i * 4 + 2]; // R
-            pixels[i * 3 + 1] = bgraData[i * 4 + 1]; // G
-            pixels[i * 3 + 2] = bgraData[i * 4 + 0]; // B
-        }
-
-        // Save as PNG using stb_image
-        stbi_write_png(filename.c_str(), width, height, 3, pixels.data(), width * 3);
-
-        context->Unmap(stagingTexture.Get(), 0);
-
-        log::info("Screen capture saved to: %s", filename.c_str());
-    }
-    catch (const winrt::hresult_error& ex)
-    {
-        log::error("Screen capture failed: %ls", ex.message().c_str());
-    }
-
-    // Clean up the frame handler
-    frameHandlerGuard();
-
-    // Stop capture
-    m_session.Close();
-
-    // This is the sync helper, sleep delay is handled in the aysnc caller.
-}
 
