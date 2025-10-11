@@ -24,7 +24,7 @@ cmake_minimum_required(VERSION 3.15)
 project(StreamlineSample)
 
 # Variables
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/_bin")
@@ -245,6 +245,23 @@ else()
     else()
         message(FATAL_ERROR "Unsupported platform for NGX Latewarp: ${STREAMLINE_TARGET_ARCH}")
     endif()
+endif()
+
+# Add WinRT support for HDR capture
+if (MSVC)
+    # target_compile_options(StreamlineSample PRIVATE /ZW)  # Enable C++/WinRT
+    
+    # # Let Visual Studio handle the include paths automatically
+    # target_compile_options(StreamlineSample PRIVATE 
+    #     "/I\"$ENV{WindowsSdkDir}Include\""
+    #     "/AI\"$ENV{WindowsSdkDir}UnionMetadata\\$ENV{WindowsSDKVersion};C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\lib\\x86\\store\\references\""
+    # )
+
+    # Add WinRT libraries
+    target_link_libraries(StreamlineSample
+        WindowsApp.lib
+        # RuntimeObject.lib
+    )
 endif()
 
 set_target_properties(StreamlineSample PROPERTIES FOLDER "Streamline Sample")

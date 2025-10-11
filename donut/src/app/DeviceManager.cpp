@@ -73,7 +73,7 @@ freely, subject to the following restrictions:
 #include <ShellScalingApi.h>
 #pragma comment(lib, "shcore.lib")
 #endif
-#include <donut/engine/TextureCache.h>
+#include <donut/engine/TextureCache.h> // for Attempt 1 & 2
 
 #if defined(_WINDOWS) && DONUT_FORCE_DISCRETE_GPU
 extern "C"
@@ -1070,3 +1070,10 @@ StreamlineInterface& DeviceManager::GetStreamline()
     return StreamlineIntegration::Get();
 }
 #endif
+
+
+
+
+
+
+

@@ -1483,9 +1483,9 @@ namespace donut::engine
         return success;
     }
 
-    bool SaveCaptureDataToEXR(const uint32_t* bgraData, const char* fileName, const uint32_t width, const uint32_t height)
+    bool SaveTMedLDRToEXR(const uint32_t* bgraData, const char* fileName, const uint32_t width, const uint32_t height)
     {
-        assert(false, "SaveCaptureDataToEXR() is not ready for use");
+        assert(false, "SaveTMedLDRToEXR() generates wrong-looking output and thus shouldn't be used.");
 
         constexpr int channels = 3; // RGB
         EXRHeader header;
@@ -1642,6 +1642,91 @@ namespace donut::engine
         delete[] image.images;
 
         printf("EXR file 'test.exr' created successfully.\n");
+        return true;
+    }
+
+    bool SaveStagingTextureDataToEXR(
+        const void* pData,
+        const uint32_t rowPitch,
+        const int width,
+        const int height,
+        const std::string filename)
+    {
+        const uint16_t* u16Data = reinterpret_cast<const uint16_t*>(pData);
+
+        EXRHeader header;
+        InitEXRHeader(&header);
+        EXRImage exrImage;
+        InitEXRImage(&exrImage);
+
+        // Configure EXR header
+        header.num_channels = 4;
+        header.channels = new EXRChannelInfo[header.num_channels];
+        header.pixel_types = new int[header.num_channels];
+        header.requested_pixel_types = new int[header.num_channels];
+
+        /// The texture stores data in RGBA order, but TEV open it as ABGR (alphetical order).
+        //const char channel_names[4] = { 'R', 'G', 'B', 'A' };
+        const char channel_names[4] = { 'A', 'B', 'G', 'R' };
+        for (int i = 0; i < header.num_channels; i++) {
+            //strncpy(header.channels[i].name, channel_names[i], 255);
+            header.channels[i].name[0] = channel_names[i];
+            header.channels[i].name[1] = '\0';
+            header.pixel_types[i] = TINYEXR_PIXELTYPE_HALF;
+            header.requested_pixel_types[i] = TINYEXR_PIXELTYPE_HALF;
+        }
+
+        header.compression_type = TINYEXR_COMPRESSIONTYPE_NONE;
+
+        // Configure EXR image
+        exrImage.num_channels = header.num_channels;
+        exrImage.width = width;
+        exrImage.height = height;
+
+        // Allocate planar arrays for RGBA channels
+        std::vector<std::vector<uint16_t>> channelData(header.num_channels);
+        for (auto& channel : channelData) {
+            channel.resize(width * height);
+        }
+
+        // Calculate row pitch in terms of uint16_t elements
+        const size_t rowPitchElements = rowPitch / sizeof(uint16_t);
+
+        // Deinterleave pixel data into planar format
+        for (uint32_t y = 0; y < height; y++) {
+            const uint16_t* srcRow = reinterpret_cast<const uint16_t*>(
+                static_cast<const uint8_t*>(pData) + y * rowPitch);
+
+            for (uint32_t x = 0; x < width; x++) {
+                const size_t dstIdx = y * width + x;
+                const size_t srcIdx = x * 4; // 4 channels per pixel
+
+                // Reverse the channel order to match EXR expectations
+                channelData[0][dstIdx] = srcRow[srcIdx + 3]; // A into R
+                channelData[1][dstIdx] = srcRow[srcIdx + 2]; // B into G
+                channelData[2][dstIdx] = srcRow[srcIdx + 1]; // G into B
+                channelData[3][dstIdx] = srcRow[srcIdx + 0]; // R into A
+            }
+
+        }
+
+        // Prepare channel pointers for EXR
+        std::vector<unsigned char*> imagePtrs(header.num_channels);
+        for (int i = 0; i < header.num_channels; i++) {
+            imagePtrs[i] = reinterpret_cast<unsigned char*>(channelData[i].data());
+        }
+        exrImage.images = imagePtrs.data();
+
+        // Save EXR file
+        const char* err = nullptr;
+        int ret = SaveEXRImageToFile(&exrImage, &header, filename.c_str(), &err);
+        bool success = (ret == TINYEXR_SUCCESS);
+
+        // Cleanup
+        delete[] header.channels;
+        delete[] header.pixel_types;
+        delete[] header.requested_pixel_types;
+        
         return true;
     }
 

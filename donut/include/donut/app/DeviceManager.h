@@ -383,7 +383,7 @@ namespace donut::app
             std::function<void(DeviceManager&, uint32_t)> beforePresent = nullptr;
             std::function<void(DeviceManager&, uint32_t)> afterPresent = nullptr;
         } m_callbacks;
-
+        
 #if DONUT_WITH_STREAMLINE
         static StreamlineInterface& GetStreamline();
 #endif

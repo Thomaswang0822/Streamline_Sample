@@ -125,7 +125,7 @@ static const std::map< const sl::Result, const std::string> errors = {
         {sl::Result::eErrorInvalidState,"eErrorInvalidState"},
         {sl::Result::eWarnOutOfVRAM,"eWarnOutOfVRAM"} };
 
-bool successCheck(sl::Result result, char* location) {
+bool successCheck(sl::Result result, const char* location) {
 
     if (result == sl::Result::eOk)
         return true;

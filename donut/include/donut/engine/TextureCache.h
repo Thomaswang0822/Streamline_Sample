@@ -316,12 +316,20 @@ namespace donut::engine
         const char* fileName);
 
     /**
-     * Attempt 5: Save screenshot to HDR instead.
-     * Unfortunately, Windows API like BitBlt() cannot capture HDR data.
-     * We need to use DX12 API.
+     * Attempt 5: Since BitBlt() we used in Attempt 4 cannot capture HDR data, we try to manually
+     * tone map the 8-bit LDR data and save to exr. Unfortunately, the result looks way off.
      */
-    [[deprecated("UNDER ACTIVE DEVELOPMENT - DO NOT USE")]]
-    bool SaveCaptureDataToEXR(const uint32_t* bgraData, const char* fileName, const uint32_t width, const uint32_t height);
+    [[deprecated("WRONG LOOKING IMAGE - DO NOT USE")]]
+    bool SaveTMedLDRToEXR(const uint32_t* bgraData, const char* fileName, const uint32_t width, const uint32_t height);
 
     bool TestTinyExrWrite();
+
+    /**
+     * Attempt 8 Helper: After we map the ID3D11Texture2D to staging texture (D3D11_MAPPED_SUBRESOURCE mapped),
+     * save it to exr file using tinyexr.
+     * 
+     * First 2 args should be mapped.pData and mapped.RowPitch
+     */
+    bool SaveStagingTextureDataToEXR(const void* pData, const uint32_t rowPitch, const int width, const int height, const std::string filename);
+
 }
