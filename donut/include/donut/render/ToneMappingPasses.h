@@ -44,7 +44,7 @@ namespace donut::render
         float eyeAdaptationSpeedDown = 0.5f;
         float minAdaptedLuminance = 0.02f;
         float maxAdaptedLuminance = 0.5f;
-        float exposureBias = -0.5f;
+        float exposureBias = -2.8f;
         float whitePoint = 3.f;
         bool enableColorLUT = true;
     };

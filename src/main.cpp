@@ -261,6 +261,11 @@ int main(int __argc, const char* const* __argv)
 
     auto scripting = ScriptingConfig(__argc, __argv);
     auto hackOptions = StreamlineSample::parseHackOptions(__argc, __argv);
+    // manual change for DEBUG
+    //hackOptions.enableHack = false;
+    //hackOptions.storeOutput = false;
+
+    
     if (hackOptions.enableHack) {
         deviceParams.backBufferWidth = 3840;
         deviceParams.backBufferHeight = 2160;
@@ -348,9 +353,12 @@ int main(int __argc, const char* const* __argv)
         assert(pApp->getViewportCount() > 0, "No valid viewport");
         auto slSample = pApp->getASample();
         slSample->hackOptions = hackOptions;
-        // load data before the main loop
+        // hide UI, cursor, and load data before the main loop
         if (hackOptions.enableHack) {
             slSample->turnOffUI();
+
+            glfwSetInputMode(deviceManager->GetWindow(), GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
+
             auto texCache = slSample->GetTextureCache();
             assert(slSample->LoadHackTextures(texCache), "load hack texture data failed");
         }

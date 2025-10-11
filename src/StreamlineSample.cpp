@@ -216,9 +216,6 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
 		options.outputMaxCount = options.frameCount;
     }
 
-    // manual change for DEBUG
-    //options.enableHack = false;
-    //options.storeOutput = false;
     return options;
 }
 
@@ -420,7 +417,8 @@ void StreamlineSample::CaptureFramePoolHDR(const std::string filename, const int
 
     auto texture = GetDXGIInterfaceFromObject<ID3D11Texture2D>(frame.Surface());
     assert(texture != nullptr);
-    SaveTextureToEXR(d3dDevice, texture, filename);
+    bool save_success = SaveTextureToEXR(d3dDevice, texture, filename);
+    assert(save_success, "SaveTextureToEXR() failed");
 
     // Calculate remaining time to meet minimum display duration
     auto captureEnd = std::chrono::high_resolution_clock::now();

@@ -307,7 +307,7 @@ public:
         size_t frameCount = 0;
         // internal, each Present Callback should take 2 * StoreDelay seconds, and Present() will evenly 
         // space the display time of rendered frame and FG frame to StoreDelay
-        const static int64_t StoreDelayMS = 5000;
+        const static int64_t StoreDelayMS = 4000;
         /// internal, used for DLSS-G cold start problem
         /// @see StreamlineSample() constructor where we set afterPresent callback to see how it works
         const static uint32_t FramesToReplay = 3;
