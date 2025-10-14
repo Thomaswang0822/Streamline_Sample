@@ -379,9 +379,6 @@ void StreamlineSample::CaptureFramePoolHDR(const std::string filename, const int
 {
     auto captureStart = std::chrono::high_resolution_clock::now();
 
-    // Grab the apartment context so we can return to it.
-    winrt::apartment_context context;
-
     auto d3dDevice = GetDXGIInterfaceFromObject<ID3D11Device>(m_captureDevice);
     winrt::com_ptr<ID3D11DeviceContext> d3dContext;
     d3dDevice->GetImmediateContext(d3dContext.put());
@@ -546,41 +543,57 @@ StreamlineSample::StreamlineSample(
     deviceManager->m_callbacks.afterAnimate  = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_SimEnd(m, f); };
     deviceManager->m_callbacks.beforeRender  = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_RenderStart(m, f); };
     deviceManager->m_callbacks.afterRender   = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_RenderEnd(m, f); };
-    deviceManager->m_callbacks.beforePresent = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_PresentStart(m, f); };
-    deviceManager->m_callbacks.afterPresent  = [this](donut::app::DeviceManager &m, uint32_t frameIdx) {
-        /// FramesToReplay (default 3) is to solve the DLSS-G cold start problem.
-        /// Without it, captured frames are:
-        /// 0A: Visual Studio (renderer window not opened yet); 0B: Frame 0
-        /// 1A: Frame 0; 1B: Frame 1;
-        /// 2A: Frame 1; 2B: Frame 1; (This is weird)
-        /// 3A: Frame 2; 3B: Frame 2.5 (FG frame); etc.
-        /// The solution is simple: store the first FramesToReplay frames in the next iteration, which are correct data,
-        /// to replace the first FramesToReplay frames in the first iteration, which are wrong (see above) due to DLSSG cold start.
-        /// E.g we have 10 frames, then frames [10, 12] can be used as frames [0, 2]
-        ///
-        /// BUT NOTE: we have to waste time saving those cold frames, otherwise super uneven present time,
-        /// e.g. 60 fps vs 6s per frame will lead to wrong captured frame.
-        /// 
-        /// Also, when calling CaptureBitBlitLDR() at frame t, frame t-1 is what's being
-        /// Presnet() and captured, probably because Present() is async.
-        /// Thus, we adjust the filename accordingly.
+    
+	/// We set capture of OG frame in beforePresent, and FG frame in afterPresent.
+    /// 
+    /// FramesToReplay (default 3) is to solve the DLSS-G cold start problem.
+    /// Without it, captured frames are:
+    /// 0A: Visual Studio (renderer window not opened yet); 0B: Frame 0
+    /// 1A: Frame 0; 1B: Frame 1;
+    /// 2A: Frame 1; 2B: Frame 1; (This is weird)
+    /// 3A: Frame 2; 3B: Frame 2.5 (FG frame); etc.
+    /// The solution is simple: store the first FramesToReplay frames in the next iteration, which are correct data,
+    /// to replace the first FramesToReplay frames in the first iteration, which are wrong (see above) due to DLSSG cold start.
+    /// E.g we have 10 frames, then frames [10, 12] can be used as frames [0, 2]
+    /// 
+    /// Also, when calling CaptureBitBlitLDR() at frame t, frame t-1 is what's being
+    /// Presnet() and captured, probably because Present() is async.
+    /// Thus, we adjust the filename accordingly.
+
+    deviceManager->m_callbacks.beforePresent = [this](donut::app::DeviceManager& m, uint32_t frameIdx) {
+        NVWrapper::Get().ReflexCallback_PresentStart(m, frameIdx);
+        
         if (hackOptions.enableHack && hackOptions.storeOutput && // should store
-            //frameIdx >= hackOptions.FramesToReplay && // have skipped dummy frames
+            frameIdx >= hackOptions.FramesToReplay && // have skipped dummy frames
             frameIdx < hackOptions.outputMaxCount + hackOptions.FramesToReplay) // within range
         {
             HWND hWnd = glfwGetWin32Window(m.GetWindow());
 
-            auto fixDigitString = [](uint32_t fid, size_t length = 3) -> std::string
-            {
-                return std::string(length - std::to_string(fid).length(), '0') + std::to_string(fid);
-            };
-            std::string frameIdStr = fixDigitString((frameIdx + hackOptions.outputMaxCount - 1) % hackOptions.outputMaxCount);
-            
+			// map frame N to frame N - 1
+            std::string fidStr = std::to_string((frameIdx + hackOptions.outputMaxCount - 1) % hackOptions.outputMaxCount);
+            // align frame number to 3 digits, e.g. "3" to "003" for cleaner folder view.
+            std::string frameIdStr = std::string(3 /* format length */ - fidStr.length(), '0') + fidStr;
+
             std::string filename0 = std::filesystem::absolute(hackOptions.outPath).string() + "/" +
                 hackOptions.identifier + "_frame" + frameIdStr + "A_og.exr";
             //CaptureBitBlitLDR(hWnd, filename0, hackOptions.StoreDelayMS);
             CaptureFramePoolHDR(filename0, hackOptions.StoreDelayMS);
-            
+        }
+        // CaptureBitBlitLDR() and CaptureFramePoolHDR() will handle the synchronization internally.
+    };
+
+    deviceManager->m_callbacks.afterPresent  = [this](donut::app::DeviceManager &m, uint32_t frameIdx) {
+
+        if (hackOptions.enableHack && hackOptions.storeOutput && // should store
+            frameIdx >= hackOptions.FramesToReplay && // have skipped dummy frames
+            frameIdx < hackOptions.outputMaxCount + hackOptions.FramesToReplay) // within range
+        {
+            HWND hWnd = glfwGetWin32Window(m.GetWindow());
+
+            // map frame N to frame N - 1
+            std::string fidStr = std::to_string((frameIdx + hackOptions.outputMaxCount - 1) % hackOptions.outputMaxCount);
+            // align frame number to 3 digits, e.g. "3" to "003" for cleaner folder view.
+            std::string frameIdStr = std::string(3 /* format length */ - fidStr.length(), '0') + fidStr;
 
             std::string filename1 = hackOptions.outPath.string() + "/" +
                 hackOptions.identifier + "_frame" + frameIdStr + "B_fg.exr";
@@ -588,7 +601,7 @@ StreamlineSample::StreamlineSample(
             CaptureFramePoolHDR(filename1, hackOptions.StoreDelayMS);
 
         }
-        // CaptureBitBlitLDR() will handle the synchronization internally.
+        // CaptureBitBlitLDR() and CaptureFramePoolHDR() will handle the synchronization internally.
 
         NVWrapper::Get().ReflexCallback_PresentEnd(m, frameIdx); 
     };

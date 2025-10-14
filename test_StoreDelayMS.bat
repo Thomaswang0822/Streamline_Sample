@@ -4,7 +4,7 @@ setlocal enabledelayedexpansion
 cd _bin
 echo This script is used for ensuring the current StoreDelayMS give a consistent frame number matching with captured images. 
 set EXE_PATH=StreamlineSample.exe
-set OUTPUT_ROOT=D:\haoxuan.wang\Streamline_Sample\media\TEST_SCENE\screenshots
+set OUTPUT_ROOT=..\media\TEST_SCENE\screenshots
 set RUN_COUNT=10
 echo Total runs: %RUN_COUNT%
 
@@ -23,7 +23,7 @@ for /L %%i in (1,1,%RUN_COUNT%) do (
     )
     
     rem Execute the program
-    rem %EXE_PATH% -EnableHack -Identifier FG_TEST -RenderResolution 1 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -OutputMaxCount 10 -OutputPath "../media/TEST_SCENE/screenshots"
+    %EXE_PATH% -EnableHack -Identifier FG_TEST -RenderResolution 1 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -OutputMaxCount 10 -OutputPath "../media/TEST_SCENE/screenshots"
 
     rem Move and verify captured files
     set FILES_MOVED=0

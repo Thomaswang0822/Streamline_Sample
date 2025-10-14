@@ -307,9 +307,9 @@ public:
         size_t frameCount = 0;
         // internal, each Present Callback should take 2 * StoreDelay seconds, and Present() will evenly 
         // space the display time of rendered frame and FG frame to StoreDelay
-        const static int64_t StoreDelayMS = 4000;
+        const static int64_t StoreDelayMS = 2000;
         /// internal, used for DLSS-G cold start problem
-        /// @see StreamlineSample() constructor where we set afterPresent callback to see how it works
+        /// @see StreamlineSample() constructor where we set Present callback to see how it works
         const static uint32_t FramesToReplay = 3;
     } hackOptions;
     // read-only data storage to copy from; copy dst are RTs defined in RenderTargets.h and GBuffer.h

@@ -230,7 +230,7 @@ namespace donut::app
     {
     public:
         // we only need hack ON/OFF to decide whether to allow window resize
-        bool enableHack;
+        bool enableHack = false;
 
         static DeviceManager* Create(nvrhi::GraphicsAPI api);
 
