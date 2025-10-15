@@ -379,6 +379,8 @@ void StreamlineSample::CaptureFramePoolHDR(const std::string filename, const int
 {
     auto captureStart = std::chrono::high_resolution_clock::now();
 
+    std::this_thread::sleep_for(std::chrono::milliseconds(StoreDelayMS >> 2));
+
     auto d3dDevice = GetDXGIInterfaceFromObject<ID3D11Device>(m_captureDevice);
     winrt::com_ptr<ID3D11DeviceContext> d3dContext;
     d3dDevice->GetImmediateContext(d3dContext.put());
