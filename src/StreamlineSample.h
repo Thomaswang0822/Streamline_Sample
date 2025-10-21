@@ -39,6 +39,7 @@
 #include "UIData.h"
 #include <random>
 #include <chrono>
+#include <unordered_set>
 
 // From Donut
 #include <donut/core/vfs/VFS.h>
@@ -268,16 +269,23 @@ private:
 
     bool CreateCaptureDevice();
     bool CreateCaptureItemForWindow();
-    /// calls CreateCaptureDevice() and CreateCaptureItemForWindow()
+    /**
+     * @brief Calls CreateCaptureDevice() and CreateCaptureItemForWindow()
+     * @return success or not
+     */
     bool InitializeFramePoolCapture();
     void CleanupFramePoolCapture();
-
+    
     /**
-     * It does 2 things: 
-     * 1) map the given ID3D11Texture2D to a staging texture (D3D11_MAPPED_SUBRESOURCE).
-     * 2) call SaveStagingTextureDataToEXR() in TextureCache.h to save exr file using tinyexr.
+     * @brief Helper of Attempt 8 CaptureFramePoolHDR(). 
+     * Should be called in a while(true) loop, i.e. repeat until unique. It does 2 things:
+     * 
+     * 1) map the given ID3D11Texture2D to a staging texture(D3D11_MAPPED_SUBRESOURCE).
+     * 2) IF frame is unique (by checking image hash), call SaveStagingTextureDataToEXR()
+     * in TextureCache.h to save exr file using tinyexr.
+     * @return True if texture is a unqiue new one and saved to exr file successfully. False if duplicate.
      */
-    bool SaveTextureToEXR(
+    bool SaveIfUnqiueTexture(
         winrt::com_ptr<ID3D11Device> device,
         winrt::com_ptr<ID3D11Texture2D> texture,
         const std::string filename);
@@ -303,14 +311,26 @@ public:
         size_t outputMaxCount = 0;
         std::filesystem::path outPath = "";
 
-        // internal, should not be set directly. Set by counting exr files in hackPaths
+        // INTERNAL, should not be set directly. Set by counting exr files in hackPaths
         size_t frameCount = 0;
-        // internal, each Present Callback should take 2 * StoreDelay seconds, and Present() will evenly 
-        // space the display time of rendered frame and FG frame to StoreDelay
-        const static int64_t StoreDelayMS = 2000;
-        /// internal, used for DLSS-G cold start problem
-        /// @see StreamlineSample() constructor where we set Present callback to see how it works
-        const static uint32_t FramesToReplay = 3;
+        /**
+         * @brief INTERNAL, for sleep bubble trick.
+         * Each Present Callback should take 2 * StoreDelay seconds, and Present() will evenly 
+         * space the display time of rendered frame and FG frame to StoreDelay
+         * 
+         * UPDATE: Previously we have this StoreDelayMS bubble (each rendered frame or FG frame) displays
+         * for StoreDelayMS ms to give us enough time to **accurately** capture frame and avoid duplicates.
+         * Now with image hash to check duplication, we repeat capture until getting a **precisely** new frame.
+         */
+        [[deprecated("Sleep bubble trick should NOT be used when having image hash")]]
+        constexpr static int64_t StoreDelayMS = 2000;
+        // INTERNAL, timeout before trying another capture and see if it's a new frame.
+        constexpr static std::chrono::milliseconds DuplicateTimeout{ 500 };
+        /**
+         * @brief INTERNAL, used for DLSS-G cold start problem.
+         * See StreamlineSample() constructor where we set Present callback to see how it works
+         */
+        constexpr static uint32_t FramesToReplay = 3;
     } hackOptions;
     // read-only data storage to copy from; copy dst are RTs defined in RenderTargets.h and GBuffer.h
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedColorsHDR;
@@ -318,9 +338,15 @@ public:
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedDepths;
     std::vector<donut::math::float2> hackLoadedJitterOffsets;
 
+    /**
+     * @brief Stores image by xxhash XXH64(). Used for duplication detection after capture before export.
+     */
+    std::unordered_set<uint64_t> hash_bin;
+
     bool LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache);
 
     /**
+     * @brief Parse from Cmdline
      * Will be called in App scope BEFORE any StreamlineSample instance is created.
      * That global option will be manually copied to the instance right before 
      * calling LoadHackTextures() above.
@@ -333,37 +359,37 @@ public:
     }
 
     /**
-     * Attempt 4 (SUCCESS): Save screenshot from frontend by passing the GLFW window to Windows API.
+     * @brief Attempt 4 (SUCCESS): Save screenshot from frontend by passing the GLFW window to Windows API.
      * Finally we find a way to save FG frames.
      * 
      * \param hWnd A Windows handle of the GLFW window get by glfwGetWin32Window() a GLFWwindow*
 	 * \param StoreDelayMS Need a delay to ensure successful capture of presented frame. See HackOptionDef::StoreDelayMS.
      */
-    void CaptureBitBlitLDR(HWND hWnd, std::string filename, const int64_t StoreDelayMS);
+    void CaptureBitBlitLDR(HWND hWnd, std::string filename);
 
     /**
-     * Attempt 6: Save screenshot with winrt AdvancedPhotoCapture class?
+     * @brief Attempt 6: Save screenshot with winrt AdvancedPhotoCapture class?
      * No, I spent 2 days making it work, and finally realized it's media capture 
      * (i.e. taking a photo of you using the camera) instead of screen capture.
      */
     [[deprecated("NOT screen capture, deprecated")]]
-    winrt::Windows::Foundation::IAsyncAction CaptureMediaAsync(std::string filename, const int64_t StoreDelayMS);
+    winrt::Windows::Foundation::IAsyncAction CaptureMediaAsync(std::string filename);
 
     /**
-     * Attempt 7: Save screenshot with winrt Windows.Media.AppRecording
+     * @brief Attempt 7: Save screenshot with winrt Windows.Media.AppRecording
      * Unfortunately, capture is not supported in our Win32 app. It's primarily for UWP apps.
      */
     [[deprecated("NOT supported, deprecated")]]
-    winrt::Windows::Foundation::IAsyncAction CaptureAppRecordingAsync(std::string filename, const int64_t StoreDelayMS);
+    winrt::Windows::Foundation::IAsyncAction CaptureAppRecordingAsync(std::string filename);
 
     /**
-     * Attempt 8 (SUCCESS): Capture with winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool
+     * @brief Attempt 8 (SUCCESS): Capture with winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool
      * Unlike attempt 4 (success) that uses BitBlit() which captures the LDR screen,
      * here we get a Direct3D11CaptureFrame that supports RGBA16_FLOAT HDR format.
      *  
      * We install Windows Implementation Library (wil) and use wil::shared_event to handle FrameArrived()
      */
-    void CaptureFramePoolHDR(const std::string filename, const int64_t StoreDelayMS);
+    void CaptureFramePoolHDR(const std::string filename);
 
 #pragma endregion
 

@@ -70,7 +70,7 @@
 
 #include <wil/resource.h> // wil::shared_event
 
-#include <tinyexr.h>
+#include <xxhash.h>
 
 using namespace donut;
 using namespace donut::math;
@@ -331,7 +331,7 @@ static winrt::com_ptr<T> GetDXGIInterfaceFromObject(winrt::Windows::Foundation::
     return result;
 }
 
-bool StreamlineSample::SaveTextureToEXR(winrt::com_ptr<ID3D11Device> device, winrt::com_ptr<ID3D11Texture2D> texture, const std::string filename)
+bool StreamlineSample::SaveIfUnqiueTexture(winrt::com_ptr<ID3D11Device> device, winrt::com_ptr<ID3D11Texture2D> texture, const std::string filename)
 {
     // Create staging texture
     D3D11_TEXTURE2D_DESC desc;
@@ -368,19 +368,36 @@ bool StreamlineSample::SaveTextureToEXR(winrt::com_ptr<ID3D11Device> device, win
         return false;
     }
 
-    SaveStagingTextureDataToEXR(mapped.pData, mapped.RowPitch, width, height, filename);
+    // Check if data is contiguous (common optimization)
+    if (mapped.RowPitch != width * bytesPerPixel) {
+        log::error("Not contiguous texture data: width is %d but row pitch is %d. "
+            "Try turn on fullscreen mode in main.cpp(%d now)",
+            width, mapped.RowPitch, GetDeviceManager()->GetDeviceParams().startFullscreen);
+    }
+    // returns XXH64_hash_t which is ull
+    uint64_t hash64 = XXH64(mapped.pData, width * height * bytesPerPixel, 0 /* use consistent seed */);
 
+    // process and return accordingly
+    bool uniqueHash = !hash_bin.contains(hash64);;
+    if (uniqueHash) {
+        // unique, save it
+        if (SaveStagingTextureDataToEXR(mapped.pData, mapped.RowPitch, width, height, filename)) {
+            hash_bin.insert(hash64);
+        }
+        else {
+            // SHOULD NOT HAPPEN (suggests bug in texture saving function): remove hash from set in order to try it again.
+            log::error("Get unique new frame but SaveStagingTextureDataToEXR() failed");
+        }
+    }
+    
+    // final cleanup no matter success or not
     context->Unmap(stagingTexture.get(), 0);
-    return true;
+    return uniqueHash;
 }
 
 
-void StreamlineSample::CaptureFramePoolHDR(const std::string filename, const int64_t StoreDelayMS)
+void StreamlineSample::CaptureFramePoolHDR(const std::string filename)
 {
-    auto captureStart = std::chrono::high_resolution_clock::now();
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(StoreDelayMS >> 2));
-
     auto d3dDevice = GetDXGIInterfaceFromObject<ID3D11Device>(m_captureDevice);
     winrt::com_ptr<ID3D11DeviceContext> d3dContext;
     d3dDevice->GetImmediateContext(d3dContext.put());
@@ -407,29 +424,29 @@ void StreamlineSample::CaptureFramePoolHDR(const std::string filename, const int
         });
 
     session.StartCapture();
-    // sync wait
-    captureEvent.wait();
+
+    // repeat until we successfully save a unique new frame
+    while (true) {
+        // sync wait
+        captureEvent.wait();
+
+        auto texture = GetDXGIInterfaceFromObject<ID3D11Texture2D>(frame.Surface());
+        assert(texture != nullptr);
+
+        if (SaveIfUnqiueTexture(d3dDevice, texture, filename)) {
+            break;
+        }
+        else {
+            std::this_thread::sleep_for(hackOptions.DuplicateTimeout);
+            // Reset for next capture
+            frame = nullptr;
+            captureEvent.ResetEvent();
+        }
+    }
 
     // End the capture
     session.Close();
     framePool.Close();
-
-    auto texture = GetDXGIInterfaceFromObject<ID3D11Texture2D>(frame.Surface());
-    assert(texture != nullptr);
-    bool save_success = SaveTextureToEXR(d3dDevice, texture, filename);
-    assert(save_success, "SaveTextureToEXR() failed");
-
-    // Calculate remaining time to meet minimum display duration
-    auto captureEnd = std::chrono::high_resolution_clock::now();
-    auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(captureEnd - captureStart).count();
-    int64_t remainingWait = StoreDelayMS - elapsedMS;
-    if (remainingWait > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
-    }
-    else {
-        log::error("StoreDelayMS = %d ms set too low, taking screenshot took %d ms", StoreDelayMS, elapsedMS);
-    }
-
     return;
 
 }
@@ -578,8 +595,8 @@ StreamlineSample::StreamlineSample(
 
             std::string filename0 = std::filesystem::absolute(hackOptions.outPath).string() + "/" +
                 hackOptions.identifier + "_frame" + frameIdStr + "A_og.exr";
-            //CaptureBitBlitLDR(hWnd, filename0, hackOptions.StoreDelayMS);
-            CaptureFramePoolHDR(filename0, hackOptions.StoreDelayMS);
+            //CaptureBitBlitLDR(hWnd, filename0);
+            CaptureFramePoolHDR(filename0);
         }
         // CaptureBitBlitLDR() and CaptureFramePoolHDR() will handle the synchronization internally.
     };
@@ -599,8 +616,8 @@ StreamlineSample::StreamlineSample(
 
             std::string filename1 = hackOptions.outPath.string() + "/" +
                 hackOptions.identifier + "_frame" + frameIdStr + "B_fg.exr";
-            //CaptureBitBlitLDR(hWnd, filename1, hackOptions.StoreDelayMS);
-            CaptureFramePoolHDR(filename1, hackOptions.StoreDelayMS);
+            //CaptureBitBlitLDR(hWnd, filename1);
+            CaptureFramePoolHDR(filename1);
 
         }
         // CaptureBitBlitLDR() and CaptureFramePoolHDR() will handle the synchronization internally.
@@ -681,7 +698,7 @@ StreamlineSample::~StreamlineSample()
 #endif
 }
 
-winrt_foundation::IAsyncAction StreamlineSample::CaptureMediaAsync(std::string filename, const int64_t StoreDelayMS) {
+winrt_foundation::IAsyncAction StreamlineSample::CaptureMediaAsync(std::string filename) {
     assert(false, "CaptureMediaAsync() deprecated");
     auto captureStart = std::chrono::high_resolution_clock::now();
 
@@ -745,15 +762,15 @@ winrt_foundation::IAsyncAction StreamlineSample::CaptureMediaAsync(std::string f
     // Handle minimum display time
     auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - captureStart).count();
-    if (int64_t remainingWait = StoreDelayMS - elapsedMS; remainingWait > 0) {
+    if (int64_t remainingWait = hackOptions.StoreDelayMS - elapsedMS; remainingWait > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
     }
     else {
-        log::error("StoreDelayMS=%d too low, capture took %d ms", StoreDelayMS, elapsedMS);
+        log::error("StoreDelayMS=%d too low, capture took %d ms", hackOptions.StoreDelayMS, elapsedMS);
     }
 }
 
-winrt_foundation::IAsyncAction StreamlineSample::CaptureAppRecordingAsync(std::string filename, const int64_t StoreDelayMS) {
+winrt_foundation::IAsyncAction StreamlineSample::CaptureAppRecordingAsync(std::string filename) {
     auto captureStart = std::chrono::high_resolution_clock::now();
 
     try {
@@ -801,11 +818,11 @@ winrt_foundation::IAsyncAction StreamlineSample::CaptureAppRecordingAsync(std::s
     auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - captureStart).count();
 
-    if (int64_t remainingWait = StoreDelayMS - elapsedMS; remainingWait > 0) {
+    if (int64_t remainingWait = hackOptions.StoreDelayMS - elapsedMS; remainingWait > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
     }
     else {
-        log::error("StoreDelayMS=%d too low, capture took %d ms", StoreDelayMS, elapsedMS);
+        log::error("StoreDelayMS=%d too low, capture took %d ms", hackOptions.StoreDelayMS, elapsedMS);
     }
 }
 
@@ -885,9 +902,7 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
     return true;
 }
 
-void StreamlineSample::CaptureBitBlitLDR(HWND hWnd, std::string filename, const int64_t StoreDelayMS) {
-    auto captureStart = std::chrono::high_resolution_clock::now();
-
+void StreamlineSample::CaptureBitBlitLDR(HWND hWnd, std::string filename) {
     // Get window dimensions with DPI awareness
     RECT rect;
     GetClientRect(hWnd, &rect);
@@ -923,11 +938,26 @@ void StreamlineSample::CaptureBitBlitLDR(HWND hWnd, std::string filename, const 
 
     SelectObject(hdcMem, hBitmap);
 
-    // Capture with diagnostic
-    BOOL captureSuccess = BitBlt(hdcMem, 0, 0, width, height, hdcScreen, 0, 0, SRCCOPY);
-    if (!captureSuccess) {
-        DWORD err = GetLastError();
-        log::error("BitBlt failed: %d", err);
+    // Capture until we get unique new frame
+    while (true) {
+        BOOL captureSuccess = BitBlt(hdcMem, 0, 0, width, height, hdcScreen, 0, 0, SRCCOPY);
+        if (!captureSuccess) {
+            DWORD err = GetLastError();
+            log::error("BitBlt failed: %d", err);
+            // try again
+            continue;
+        }
+
+        uint64_t hash64 = XXH64(reinterpret_cast<const void*>(bgraData), 
+            width * height * 4 /* bytes per pixel, RBGA8_UNORM */, 0 /* use consistent seed */);
+        if (!hash_bin.contains(hash64)) {
+            hash_bin.insert(hash64);
+            break;
+        }
+        else {
+            // duplicate
+            std::this_thread::sleep_for(hackOptions.DuplicateTimeout);
+        }
     }
 
     // Get bitmap data directly from DIB section
@@ -948,17 +978,7 @@ void StreamlineSample::CaptureBitBlitLDR(HWND hWnd, std::string filename, const 
     DeleteObject(hBitmap);
     DeleteDC(hdcMem);
     ReleaseDC(nullptr, hdcScreen);
-
-    // Calculate remaining time to meet minimum display duration
-    auto captureEnd = std::chrono::high_resolution_clock::now();
-    auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(captureEnd - captureStart).count();
-    int64_t remainingWait = StoreDelayMS - elapsedMS;
-    if (remainingWait > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
-    }
-    else {
-        log::error("StoreDelayMS = %d ms set too low, taking screenshot took %d ms", StoreDelayMS, elapsedMS);
-    }
+    return;
 }
 
 void StreamlineSample::SetLatewarpOptions()
@@ -2409,7 +2429,14 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     // CLOSE: early close when we store hack output; 
     // run several more frame to avoid strange frame sync error under fullscreen mode, which causes the system to freeze.
     if (hackOptions.storeOutput && GetFrameIndex() == hackOptions.FramesToReplay + hackOptions.outputMaxCount + 5)
+    {
+        if (!hash_bin.empty()) {
+            // we may use other approach other than attempt 8, the only one that populates hash_bin
+            assert(hash_bin.size() == hackOptions.outputMaxCount * 2,
+                "Should store 2 x %d outputs but got %d", hackOptions.outputMaxCount, hash_bin.size());
+        }
         glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);
+    }
 
     if (GetFrameIndex() == m_ScriptingConfig.maxFrames)
         glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);
