@@ -283,9 +283,9 @@ private:
      * 1) map the given ID3D11Texture2D to a staging texture(D3D11_MAPPED_SUBRESOURCE).
      * 2) IF frame is unique (by checking image hash), call SaveStagingTextureDataToEXR()
      * in TextureCache.h to save exr file using tinyexr.
-     * @return True if texture is a unqiue new one and saved to exr file successfully. False if duplicate.
+     * @return True if texture is a unique new one and saved to exr file successfully. False if duplicate.
      */
-    bool SaveIfUnqiueTexture(
+    bool SaveIfUniqueTexture(
         winrt::com_ptr<ID3D11Device> device,
         winrt::com_ptr<ID3D11Texture2D> texture,
         const std::string filename);

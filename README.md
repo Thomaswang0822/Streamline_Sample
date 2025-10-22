@@ -75,12 +75,31 @@ The latter is useful if you want to fix issues unrelated to export. We levarage 
 
 ## True HDR Capture: New Feature and Issue
 
-TLDR: `StoreDelayMS` in [StreamlineSample.h](src/StreamlineSample.h) line 310 must be set high enough depending on hardware capabilities. To ensure current value can guarantee a consistent filename vs actual frame number, run `test_StoreDelayMS.bat`. We recommend starting with `StoreDelayMS = 4000`.
+This "capture-HDR" is branched out from "capture-LDR", with 2 squash merges of all of our attempts to capture the screen in true HDR format. In "capture-LDR" used Windows API `BitBlit()` which only supports LDR capture. Now, we leveraged `winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool` to capture the window content to a DX11 texture, which supports true HDR `RGBA16_FLOAT` format.
 
-This "capture-HDR" is branched out from "capture-LDR", with a squash merge of all of our attempts to capture the screen in true HDR format. In "capture-LDR" used Windows API `BitBlit()` which only supports LDR capture. Now, we leveraged `winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool` to capture the window content to a DX11 texture, which supports true HDR `RGBA16_FLOAT` format.
+A even bigger improvement is frame consistency, i.e. how we ensure **frameN.exr** really captures frameN contents. Previously, we used the "sleep bubble" trick to give us enough time to take captures, by extending the `Present()` time for each frame from 1/60 sec (if 60FPS) to several seconds. For it's details, see the [confluence page on LDR capture](https://sh-code.mthreads.com/haoxuan.wang/dlss4-offline-runner/-/tree/capture-LDR).
 
-However, we must note a particular caveat. We still use the same "sleep for several seconds during each `Present()` such that capture function has enough time" trick. For it's details, see the [confluence page](https://sh-code.mthreads.com/haoxuan.wang/dlss4-offline-runner/-/tree/capture-LDR). However, this time the capture function is not fully synchronous (blocking). Thus, even though our `end - start` timer reports shorter capture time than the delay, we could still end up with inconsistent filename vs actual frame number, e.g. "FG_TEST_frame001A_og.exr" may store frame 0 or frame 2.
+Since we don't really care about execution speed, this should be acceptable if still giving consistent frame. However, this time the capture function is not synchronous (blocking). At the same time, `Present()` function, or more precisely, the following
 
-The solution is simple: give a more lenient delay window to capture function. On the 5080 lab machine, set `StoreDelayMS = 4000` would make the frame number consistent. But this value depends on machine-specific IO capabilities, thus we recommend testing the stable `StoreDelayMS` when running on a different machine.
+```cpp
+IDXGISwapChain : public IDXGIDeviceSubObject
+{
+public:
+    virtual HRESULT STDMETHODCALLTYPE Present( 
+        /* [in] */ UINT SyncInterval,
+        /* [in] */ UINT Flags) = 0;
+/// other function declarations
+}
+```
 
-Open `test_StoreDelayMS.bat` and make sure the `OUTPUT_ROOT` variable is the absolute path of what you pass to "-OutputPath" Cmdline arg. Then run the script each time you want to try a different `StoreDelayMS`. We recommend starting with 4000. It will generate 10 subfolders each with all captured images. Open a subfolder at a time, load ALL images to your image viewer (e.g. Tev, with `$ tev *.exr`). Go through all images in increasing frame number order (also filename alphabetical order) and ensure a "smooth look" where each FG frame interpolates between the 2 rendered frame before and after it. You should expect FG frame N-1 to interpolate between frame N-1 and frame 0 and have a huge ghost effect.
+DXGI API being wrapped by `Present()`, is an async call. This means `bool presentSuccess = Present();` immediately returns and then `afterPresent()` callback, where we capture screen and force sleep, gets executed. It works under control when we use `BitBlit()`, a sync function which blocks and captures the frame displayed at that exact moment. However, our HDR capture has a more complex logic (event trigger and catcher) and is not **immediate**.
+
+As a result, without special treatment, we end up unpredictably capture frame N-1 for frame N image. It's unpredictable since the error can happen or not happen on different machines, and even across different runs on the same machine. The cause is likely that the actual display async action being queued by frame N-1 `Present()` happens after frame N starts its `TryGetNextFrame()` catcher, thus catching frame N-1.
+
+Our solution is to completely replace this hacky "sleep bubble" trick with something much more robust: duplication detection with image hash. Without "sleep bubble", our capture function cannot catch up with the 60 FPS (actually 120 FPS with FG turned on) frame rate. An extended frame display time let use accurately capture the frame we expect. However, this is nothing compared to image hash, which precisely results in the unique new frame we want.
+
+We deprecated "sleep bubble" trick, and used image hash on the frame data we just captured. The key is not to simply compare with the previous frame hash, but to maintain a bin of these hashes. In the end, we ensure the bin has 2N hashes, N for rendered frames and FG frames each. This immediately ensures we get all 2N frames from the renderer, each exactly once.
+
+When a duplication occurs, the capture thread simply sleeps for `DuplicateTimeout`. In theory, this could be as short as frame rate (e.g. 1/60 sec), but we found giving it a slightly bigger value (current choice is 500 ms = 0.5 sec) is better. Writing a 4K HDR image takes about the same time, and thus the actual frame rate when we take capture is equally slow.
+
+In the end, we prepared a batch script and a Python helper script to perform a test run. It repeats 5/10 runs on the same input (Cmdline args for hack options) and double-confirm no duplication exists in the captured outputs.

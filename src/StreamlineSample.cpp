@@ -331,7 +331,7 @@ static winrt::com_ptr<T> GetDXGIInterfaceFromObject(winrt::Windows::Foundation::
     return result;
 }
 
-bool StreamlineSample::SaveIfUnqiueTexture(winrt::com_ptr<ID3D11Device> device, winrt::com_ptr<ID3D11Texture2D> texture, const std::string filename)
+bool StreamlineSample::SaveIfUniqueTexture(winrt::com_ptr<ID3D11Device> device, winrt::com_ptr<ID3D11Texture2D> texture, const std::string filename)
 {
     // Create staging texture
     D3D11_TEXTURE2D_DESC desc;
@@ -433,7 +433,7 @@ void StreamlineSample::CaptureFramePoolHDR(const std::string filename)
         auto texture = GetDXGIInterfaceFromObject<ID3D11Texture2D>(frame.Surface());
         assert(texture != nullptr);
 
-        if (SaveIfUnqiueTexture(d3dDevice, texture, filename)) {
+        if (SaveIfUniqueTexture(d3dDevice, texture, filename)) {
             break;
         }
         else {
