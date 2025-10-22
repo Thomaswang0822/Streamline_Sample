@@ -264,7 +264,7 @@ int main(int __argc, const char* const* __argv)
     // manual change for DEBUG
     //hackOptions.enableHack = false;
     //hackOptions.storeOutput = false;
-
+    //hackOptions.identifier = "WITH_DEPTH";
     
     if (hackOptions.enableHack) {
         deviceParams.backBufferWidth = 3840;
@@ -344,6 +344,12 @@ int main(int __argc, const char* const* __argv)
 
         uiData.EnableVsync = deviceParams.vsyncEnabled;
         uiData.Resolution = donut::math::int2{ (int)deviceParams.backBufferWidth, (int)deviceParams.backBufferHeight };
+        if (hackOptions.enableHack) {
+            //uiData.VisualiseBuffers = true;
+            uiData.EnableUI = false;
+            // must turn on Relex for DLSS-FG
+            uiData.REFLEX_Mode = static_cast<int>(sl::ReflexMode::eLowLatency);
+        }
 
         std::shared_ptr<MultiViewportApp> pApp = std::make_shared<MultiViewportApp>(deviceManager, uiData, sceneName, scripting);
         std::shared_ptr<UIRenderer> gui = std::make_shared<UIRenderer>(deviceManager, pApp->getASample(), uiData);
@@ -353,10 +359,8 @@ int main(int __argc, const char* const* __argv)
         assert(pApp->getViewportCount() > 0, "No valid viewport");
         auto slSample = pApp->getASample();
         slSample->hackOptions = hackOptions;
-        // hide UI, cursor, and load data before the main loop
+        // hide cursor and load data before the main loop
         if (hackOptions.enableHack) {
-            slSample->turnOffUI();
-
             glfwSetInputMode(deviceManager->GetWindow(), GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
 
             auto texCache = slSample->GetTextureCache();

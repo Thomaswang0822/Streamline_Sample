@@ -426,7 +426,7 @@ void StreamlineSample::CaptureFramePoolHDR(const std::string filename)
     session.StartCapture();
 
     // repeat until we successfully save a unique new frame
-    while (true) {
+    for (uint32_t rep = 0; rep < hackOptions.DuplicateMaxRetry; rep++) {
         // sync wait
         captureEvent.wait();
 
@@ -1829,12 +1829,6 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
             m_RenderTargets = nullptr;
             m_RenderTargets = std::make_unique<RenderTargets>();
             m_RenderTargets->Init(GetDevice(), renderSize, m_DisplaySize, framebuffer->getDesc().colorAttachments[0].texture->getDesc().format);
-
-            // Load hack data
-            //if (hackOptions.enableHack) {
-            //    std::shared_ptr<TextureCache> texCache = GetTextureCache();
-            //    assert(LoadHackTextures(texCache), "load hack texture data failed");
-            //}
 
 #ifdef STREAMLINE_FEATURE_DLSS_RR
             if(GetDevice()->getGraphicsAPI() != nvrhi::GraphicsAPI::D3D11)

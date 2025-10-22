@@ -324,8 +324,14 @@ public:
          */
         [[deprecated("Sleep bubble trick should NOT be used when having image hash")]]
         constexpr static int64_t StoreDelayMS = 2000;
-        // INTERNAL, timeout before trying another capture and see if it's a new frame.
-        constexpr static std::chrono::milliseconds DuplicateTimeout{ 500 };
+        /**
+         * @brief INTERNAL, timeout before trying another capture and see if it's a new frame.
+         * 
+         * NOTE: dlfg.cpp (closed source) has a 100ms timeout before reset frame timer,
+         * thus DuplicateTimeout * DuplicateMaxRetry cannot exceed 100ms, otherwise the app freezes.
+         */
+        constexpr static std::chrono::milliseconds DuplicateTimeout{ 10 };
+        constexpr static uint32_t DuplicateMaxRetry = 5;
         /**
          * @brief INTERNAL, used for DLSS-G cold start problem.
          * See StreamlineSample() constructor where we set Present callback to see how it works
@@ -352,11 +358,6 @@ public:
      * calling LoadHackTextures() above.
      */
     static HackOptionDef parseHackOptions(int argc, const char* const* argv);
-
-    inline void turnOffUI() { 
-        m_ui.EnableUI = false; 
-        m_ui.REFLEX_Mode = static_cast<int>(sl::ReflexMode::eLowLatency);
-    }
 
     /**
      * @brief Attempt 4 (SUCCESS): Save screenshot from frontend by passing the GLFW window to Windows API.
