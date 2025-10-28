@@ -2357,6 +2357,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     GetDevice()->executeCommandList(m_CommandList);
 
     // EXPORT: backend export disabled because it cannot capture FG frames
+    //if (GetFrameIndex() < hackOptions.outputMaxCount)
     if (false && hackOptions.enableHack && hackOptions.storeOutput && // should store
         GetFrameIndex() >= hackOptions.FramesToReplay && // have skipped dummy frames
         GetFrameIndex() < hackOptions.outputMaxCount + hackOptions.FramesToReplay) // within range
@@ -2370,7 +2371,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         filePath += filename;
         bool success = false;
 
-        uint sourceId = 0;  // 0: AAResolvedColor, 1: PreUIColor, 2: all 3 back buffers
+        uint sourceId = 3;  // 0: AAResolvedColor, 1: PreUIColor, 2: all 3 back buffers, 3: motion vectors
         if (sourceId == 0) {
             auto& _checkColorAttachement = m_RenderTargets->AAResolvedFramebuffer->RenderTargets;
             success = SaveRTsToEXR(
@@ -2400,6 +2401,15 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
                     fp.string().c_str()
                 );
             }
+        }
+        else if (sourceId == 3) {
+            success = SaveMVDepthsToEXR(
+                false,
+                GetDevice(),
+                //hackOptions.enableHack ? m_RenderTargets->hackMotionVectors : m_RenderTargets->MotionVectors,
+                hackOptions.enableHack ? m_RenderTargets->hackDepth : m_RenderTargets->Depth,
+                filePath.string().c_str()
+			);
         }
         else {
             log::error("Wrong setting uint sourceId = %d;  // 0: AAResolvedColor, 1: PreUIColor, 2: all 3 back buffers", sourceId);

@@ -315,6 +315,12 @@ namespace donut::engine
         nvrhi::ITexture* texture,
         const char* fileName);
 
+    bool SaveMVDepthsToEXR(
+        bool isMV,
+        nvrhi::IDevice* device,
+        nvrhi::ITexture* texture,
+        const char* fileName);
+
     /**
      * Attempt 5: Since BitBlt() we used in Attempt 4 cannot capture HDR data, we try to manually
      * tone map the 8-bit LDR data and save to exr. Unfortunately, the result looks way off.

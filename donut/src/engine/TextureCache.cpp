@@ -607,12 +607,16 @@ bool TextureCache::hackLoadJitterFromFile(
                 idxDst = (y * imgWidth + x) * 2;  // each mv stored as 2 fp16
 
                 // no interpolation needed
-                fp16Data[idxDst]     = scaleMV(r[idxSrc], ratioX);  // mv.X
-                fp16Data[idxDst + 1] = scaleMV(g[idxSrc], ratioY);  // mv.Y
+                fp16Data[idxDst]     = scaleMV(r[idxSrc], -ratioX);  // mv.X
+                fp16Data[idxDst + 1] = scaleMV(g[idxSrc], +ratioY);  // mv.Y
             }
         } // end iterating the image
     }
     else {
+        /// VERY IMPORTANT NOTE:
+        /// http://gamedev.net/forums/topic/632751-dxgi_format-codes-and-endianness/4989986/
+        /// "For any DXGI format, the byte order is the order of the components in the format name. 
+        /// So for R8G8B8A8, R should be the first (lowest) byte and A should be the last (highest) byte."
         uint32_t* u32Data = reinterpret_cast<uint32_t*>(charData);
         for (int y = 0; y < imgHeight; y++)
         {
@@ -630,7 +634,7 @@ bool TextureCache::hackLoadJitterFromFile(
                 // Convert float to 24-bit integer depth
                 const uint32_t u24MAX = (1 << 24) - 1;
                 uint32_t depth24 = static_cast<uint32_t>(depthValue * u24MAX);
-                u32Data[idxDst] = (depth24 << 8);
+                u32Data[idxDst] = depth24; // upper 8 bits automatically 0
             }
         } // end iterating the image
     }
@@ -1458,6 +1462,136 @@ namespace donut::engine
                     channelData[2][dstIdx] = unorm8ToFP16(srcRow[srcIdx + 1]);
                     channelData[3][dstIdx] = unorm8ToFP16(srcRow[srcIdx + 2]);
 				}
+            }
+        }
+
+        // Prepare channel pointers for EXR
+        std::vector<unsigned char*> imagePtrs(header.num_channels);
+        for (int i = 0; i < header.num_channels; i++) {
+            imagePtrs[i] = reinterpret_cast<unsigned char*>(channelData[i].data());
+        }
+        exrImage.images = imagePtrs.data();
+
+        // Save EXR file
+        const char* err = nullptr;
+        int ret = SaveEXRImageToFile(&exrImage, &header, fileName, &err);
+        bool success = (ret == TINYEXR_SUCCESS);
+
+        // Cleanup
+        delete[] header.channels;
+        delete[] header.pixel_types;
+        delete[] header.requested_pixel_types;
+
+        device->unmapStagingTexture(stagingTexture);
+
+        return success;
+    }
+
+    bool SaveMVDepthsToEXR(bool isMV, nvrhi::IDevice* device, nvrhi::ITexture* texture, const char* fileName)
+    {
+        const auto& desc = texture->getDesc();
+
+        // Create command list and staging texture
+        nvrhi::CommandListHandle commandList = device->createCommandList();
+        commandList->open();
+
+        nvrhi::StagingTextureHandle stagingTexture = device->createStagingTexture(desc, nvrhi::CpuAccessMode::Read);
+        commandList->copyTexture(stagingTexture, nvrhi::TextureSlice(), texture, nvrhi::TextureSlice());
+
+        commandList->close();
+        device->executeCommandList(commandList);
+
+        // Map staging texture - get raw data pointer
+        size_t rowPitchBytes = 0;
+        const void* rawData = device->mapStagingTexture(
+            stagingTexture, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitchBytes);
+
+        if (!rawData)
+            return false;
+
+        const uint16_t* u16Data = reinterpret_cast<const uint16_t*>(rawData);
+		const uint32_t* u32Data = reinterpret_cast<const uint32_t*>(rawData);
+
+        const uint32_t width = desc.width;
+        const uint32_t height = desc.height;
+        const int channels = isMV ? 2 : 1; // MV x and y
+		const size_t bytesPerPixel = channels * isMV ? 2 : 4; // RG16_FLOAT : D24S8
+        const size_t expectedRowPitch = width * bytesPerPixel;
+        //assert(rowPitchBytes == expectedRowPitch, "Expect rowPitchBytes to be %d, got %d", expectedRowPitch, rowPitchBytes);
+
+        // Prepare EXR structures
+        EXRHeader header;
+        InitEXRHeader(&header);
+        EXRImage exrImage;
+        InitEXRImage(&exrImage);
+
+        // Configure EXR header
+        header.num_channels = channels;
+        header.channels = new EXRChannelInfo[header.num_channels];
+        header.pixel_types = new int[header.num_channels];
+        header.requested_pixel_types = new int[header.num_channels];
+
+        /// The texture stores data in RGBA order, but TEV open it as ABGR (alphetical order).
+        const char channel_names[2] = {'X', 'Y'};
+        for (int i = 0; i < header.num_channels; i++) {
+            //strncpy(header.channels[i].name, channel_names[i], 255);
+            header.channels[i].name[0] = channel_names[i];
+            header.channels[i].name[1] = '\0';
+            header.pixel_types[i] = TINYEXR_PIXELTYPE_HALF;
+            header.requested_pixel_types[i] = TINYEXR_PIXELTYPE_HALF;
+        }
+
+        header.compression_type = TINYEXR_COMPRESSIONTYPE_NONE;
+
+        // Configure EXR image
+        exrImage.num_channels = header.num_channels;
+        exrImage.width = width;
+        exrImage.height = height;
+
+        // Allocate planar arrays for RGBA channels
+        std::vector<std::vector<uint16_t>> channelData(header.num_channels);
+        for (auto& channel : channelData) {
+            channel.resize(width * height);
+        }
+
+        // Calculate row pitch in terms of uint16_t elements
+        const size_t rowPitchElements = rowPitchBytes / (isMV ? sizeof(uint16_t) : sizeof(uint32_t));;
+
+        constexpr uint32_t FP24MAX = 0x00FFFFFF;
+        auto float_to_half = [](float value) -> uint16_t {
+            tinyexr::FP32 f32;
+			f32.f = value;
+			return tinyexr::float_to_half_full(f32).u;
+        };
+
+        // Deinterleave pixel data into planar format
+        for (uint32_t y = 0; y < height; y++) {
+            if (isMV) {
+                const uint16_t* srcRow = u16Data + y * rowPitchElements;
+
+                for (uint32_t x = 0; x < width; x++) {
+                    const size_t dstIdx = y * width + x;
+                    const size_t srcIdx = x * channels; // 2 channels per pixel
+
+                    channelData[0][dstIdx] = srcRow[srcIdx + 0]; // X
+                    channelData[1][dstIdx] = srcRow[srcIdx + 1]; // Y
+                }
+            }
+            else {
+                // Depth texture is D24S8 format
+                const uint32_t* srcRow = u32Data + y * rowPitchElements;
+
+                for (uint32_t x = 0; x < width; x++) {
+                    uint32_t pixel = srcRow[x];
+                    // Extract depth from D24S8 (depth in lower bits)
+                    uint32_t depth24 = pixel & FP24MAX;
+                    float depthValue = static_cast<float>(depth24) / static_cast<float>(FP24MAX);
+                    // Convert to FP16
+                    uint16_t halfDepth = float_to_half(depthValue);
+
+                    size_t dstIdx = y * width + x;
+                    channelData[0][dstIdx] = halfDepth;
+                }
             }
         }
 
