@@ -369,11 +369,11 @@ bool StreamlineSample::SaveIfUniqueTexture(winrt::com_ptr<ID3D11Device> device, 
     }
 
     // Check if data is contiguous (common optimization)
-    if (mapped.RowPitch != width * bytesPerPixel) {
-        log::error("Not contiguous texture data: width is %d but row pitch is %d. "
-            "Try turn on fullscreen mode in main.cpp(%d now)",
-            width, mapped.RowPitch, GetDeviceManager()->GetDeviceParams().startFullscreen);
-    }
+    //if (mapped.RowPitch != width * bytesPerPixel) {
+    //    log::error("Not contiguous texture data: width is %d but row pitch is %d. "
+    //        "Try turn on fullscreen mode in main.cpp(%d now)",
+    //        width, mapped.RowPitch, GetDeviceManager()->GetDeviceParams().startFullscreen);
+    //}
     // returns XXH64_hash_t which is ull
     uint64_t hash64 = XXH64(mapped.pData, width * height * bytesPerPixel, 0 /* use consistent seed */);
 
@@ -381,17 +381,19 @@ bool StreamlineSample::SaveIfUniqueTexture(winrt::com_ptr<ID3D11Device> device, 
     bool uniqueHash = !hash_bin.contains(hash64);;
     if (uniqueHash) {
         // unique, save it
-        if (SaveStagingTextureDataToEXR(mapped.pData, mapped.RowPitch, width, height, filename)) {
-            hash_bin.insert(hash64);
-        }
-        else {
-            // SHOULD NOT HAPPEN (suggests bug in texture saving function): remove hash from set in order to try it again.
-            log::error("Get unique new frame but SaveStagingTextureDataToEXR() failed");
-        }
+        FrameData frameData = { {}, mapped.RowPitch, width, height, filename };
+        
+        // Calculate total size and copy the data
+        size_t totalSize = height * mapped.RowPitch;
+        frameData.data.resize(totalSize);
+        memcpy(frameData.data.data(), mapped.pData, totalSize);
+
+        hash_bin.emplace(hash64, std::move(frameData));
     }
     
     // final cleanup no matter success or not
     context->Unmap(stagingTexture.get(), 0);
+	stagingTexture = nullptr;
     return uniqueHash;
 }
 
@@ -427,8 +429,16 @@ void StreamlineSample::CaptureFramePoolHDR(const std::string filename)
 
     // repeat until we successfully save a unique new frame
     for (uint32_t rep = 0; rep < hackOptions.DuplicateMaxRetry; rep++) {
-        // sync wait
+        // sync wait, signature:
+        // bool wait(DWORD dwMilliseconds = INFINITE, BOOL bAlertable = FALSE) const WI_NOEXCEPT
         captureEvent.wait();
+
+        // We may get nothing within the timeout
+        if (frame == nullptr) {
+            // Reset for next capture
+            captureEvent.ResetEvent();
+            continue;
+        }
 
         auto texture = GetDXGIInterfaceFromObject<ID3D11Texture2D>(frame.Surface());
         assert(texture != nullptr);
@@ -617,7 +627,7 @@ StreamlineSample::StreamlineSample(
             std::string filename1 = hackOptions.outPath.string() + "/" +
                 hackOptions.identifier + "_frame" + frameIdStr + "B_fg.exr";
             //CaptureBitBlitLDR(hWnd, filename1);
-            CaptureFramePoolHDR(filename1);
+            //CaptureFramePoolHDR(filename1);
 
         }
         // CaptureBitBlitLDR() and CaptureFramePoolHDR() will handle the synchronization internally.
@@ -951,7 +961,8 @@ void StreamlineSample::CaptureBitBlitLDR(HWND hWnd, std::string filename) {
         uint64_t hash64 = XXH64(reinterpret_cast<const void*>(bgraData), 
             width * height * 4 /* bytes per pixel, RBGA8_UNORM */, 0 /* use consistent seed */);
         if (!hash_bin.contains(hash64)) {
-            hash_bin.insert(hash64);
+            FrameData uselessData = { {}, 0, 0, 0, "" };
+            hash_bin.emplace(hash64, uselessData);
             break;
         }
         else {
@@ -2435,9 +2446,15 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     if (hackOptions.storeOutput && GetFrameIndex() == hackOptions.FramesToReplay + hackOptions.outputMaxCount + 5)
     {
         if (!hash_bin.empty()) {
-            // we may use other approach other than attempt 8, the only one that populates hash_bin
-            assert(hash_bin.size() == hackOptions.outputMaxCount * 2,
-                "Should store 2 x %d outputs but got %d", hackOptions.outputMaxCount, hash_bin.size());
+            log::info("Saving %d captured frames in the end.", hash_bin.size());
+            for (const auto& [hashKey, frameData] : hash_bin) {
+                bool success = SaveStagingTextureDataToEXR(
+                    frameData.data.data(),
+                    frameData.rowPitch,
+					frameData.width, frameData.height,
+                    frameData.filename
+				);
+            }
         }
         glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);
     }

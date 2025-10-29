@@ -264,6 +264,7 @@ int main(int __argc, const char* const* __argv)
     // manual change for DEBUG
     //hackOptions.enableHack = false;
     //hackOptions.storeOutput = false;
+    hackOptions.outputMaxCount = 60;
     //hackOptions.identifier = "WITH_DEPTH";
     
     if (hackOptions.enableHack) {

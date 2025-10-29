@@ -39,7 +39,7 @@
 #include "UIData.h"
 #include <random>
 #include <chrono>
-#include <unordered_set>
+#include <unordered_map>
 
 // From Donut
 #include <donut/core/vfs/VFS.h>
@@ -344,10 +344,18 @@ public:
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedDepths;
     std::vector<donut::math::float2> hackLoadedJitterOffsets;
 
+    struct FrameData {
+        std::vector<uint8_t> data;
+        const uint32_t rowPitch;
+        const int width;
+        const int height;
+        const std::string filename;
+    };
+
     /**
      * @brief Stores image by xxhash XXH64(). Used for duplication detection after capture before export.
      */
-    std::unordered_set<uint64_t> hash_bin;
+    std::unordered_map<uint64_t, FrameData> hash_bin;
 
     bool LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache);
 
