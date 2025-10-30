@@ -93,7 +93,7 @@ using namespace Microsoft::WRL;
 
 
 /// typical usage:
-/// -EnableHack -Identifier FG_TEST -RenderResolution 1 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -OutputMaxCount 10 -OutputPath "../media/TEST_SCENE/screenshots"
+/// -EnableHack -Identifier FG_TEST -RenderResolution 1 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -BatchIndex 1 -OutputPath "../media/TEST_SCENE/screenshots"
 StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, const char* const* argv)
 {
     HackOptionDef options;
@@ -101,7 +101,7 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
     std::vector<std::string> argList(argv + 1, argv + argc);  
 
     // counter to sanity check hackPaths, result written to options.frameCount 
-    auto count_exr_files = [](const std::filesystem::path& folderPath) {
+    auto count_exr_files = [](const std::filesystem::path& folderPath) -> size_t {
         return std::count_if(std::filesystem::directory_iterator(folderPath), std::filesystem::directory_iterator{}, [](const auto& entry) {
             return entry.path().extension() == ".exr";
         });
@@ -172,8 +172,9 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
                 options.hackPaths[0].c_str(), options.hackPaths[1].c_str(), options.hackPaths[2].c_str(),
                 nTargets, gtCount, jitterCount);
 
-            // IMPORTANT: internal member frameCount can ONLY be set here.
-            options.frameCount = static_cast<size_t>(nTargets);
+            // IMPORTANT: internal member frameCount and totalBatches can ONLY be set here.
+            options.frameCount = nTargets;
+            options.totalBatches = nTargets / HackOptionDef::FramesToCapture;
 
             currentArg++;
             continue;
@@ -183,13 +184,13 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
             options.storeOutput = true;
             continue;
         }
-        if (hackMode && command == "-OutputMaxCount")
+        if (hackMode && command == "-BatchIndex")
         {
             // We require at least 1 argument
             assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
-                "-OutputMaxCount requires a input to be provided (usage: -OutputMaxCount <input>");
+                "-BatchIndex requires a input to be provided (usage: -BatchIndex <input>");
 
-            options.outputMaxCount = std::stoull(argList[currentArg + 1]);  // size_t is u long long
+            options.batchIndex = std::stoull(argList[currentArg + 1]);  // size_t is u long long
 
             currentArg++;
             continue;
@@ -206,15 +207,8 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
         }
     }
 
-    /// Better logic: handle tricky dependency of outputMaxCount on frameCount after parsing all args.
-    /// Tricky because -OutputMaxCount is optional, and when it's given, it can come 
-	/// before or after -HackPaths, and it can exceed frameCount given by counting number of input exr files.
     assert(options.frameCount > 0, "hackOptions.frameCount is not set because -HackPaths <PATH> is missing or has wrong format.");
-    if (options.outputMaxCount == 0 || /* not given */
-        options.outputMaxCount > options.frameCount /* or too big */)
-    {
-		options.outputMaxCount = options.frameCount;
-    }
+    options.batchIndex = std::min(options.batchIndex, options.totalBatches - 1); // cap batchIndex
 
     return options;
 }
@@ -411,7 +405,7 @@ void StreamlineSample::CaptureFramePoolHDR(const std::string filename)
     auto framePool = Direct3D11CaptureFramePool::CreateFreeThreaded(
         m_captureDevice,
         DirectXPixelFormat::R16G16B16A16Float,
-        1,
+        3,
         m_captureItem.Size());
     auto session = framePool.CreateCaptureSession(m_captureItem);
 
@@ -431,7 +425,7 @@ void StreamlineSample::CaptureFramePoolHDR(const std::string filename)
     for (uint32_t rep = 0; rep < hackOptions.DuplicateMaxRetry; rep++) {
         // sync wait, signature:
         // bool wait(DWORD dwMilliseconds = INFINITE, BOOL bAlertable = FALSE) const WI_NOEXCEPT
-        captureEvent.wait();
+        captureEvent.wait(50 /* timeout millisec */);
 
         // We may get nothing within the timeout
         if (frame == nullptr) {
@@ -575,14 +569,14 @@ StreamlineSample::StreamlineSample(
     
 	/// We set capture of OG frame in beforePresent, and FG frame in afterPresent.
     /// 
-    /// FramesToReplay (default 3) is to solve the DLSS-G cold start problem.
+    /// FramesToWarmup (default 3) is to solve the DLSS-G cold start problem.
     /// Without it, captured frames are:
     /// 0A: Visual Studio (renderer window not opened yet); 0B: Frame 0
     /// 1A: Frame 0; 1B: Frame 1;
     /// 2A: Frame 1; 2B: Frame 1; (This is weird)
     /// 3A: Frame 2; 3B: Frame 2.5 (FG frame); etc.
-    /// The solution is simple: store the first FramesToReplay frames in the next iteration, which are correct data,
-    /// to replace the first FramesToReplay frames in the first iteration, which are wrong (see above) due to DLSSG cold start.
+    /// The solution is simple: store the first FramesToWarmup frames in the next iteration, which are correct data,
+    /// to replace the first FramesToWarmup frames in the first iteration, which are wrong (see above) due to DLSSG cold start.
     /// E.g we have 10 frames, then frames [10, 12] can be used as frames [0, 2]
     /// 
     /// Also, when calling CaptureBitBlitLDR() at frame t, frame t-1 is what's being
@@ -593,13 +587,16 @@ StreamlineSample::StreamlineSample(
         NVWrapper::Get().ReflexCallback_PresentStart(m, frameIdx);
         
         if (hackOptions.enableHack && hackOptions.storeOutput && // should store
-            frameIdx >= hackOptions.FramesToReplay && // have skipped dummy frames
-            frameIdx < hackOptions.outputMaxCount + hackOptions.FramesToReplay) // within range
+            frameIdx >= hackOptions.FramesToWarmup && // have skipped dummy frames
+            frameIdx < hackOptions.FramesToCapture + hackOptions.FramesToWarmup) // within range
         {
             HWND hWnd = glfwGetWin32Window(m.GetWindow());
 
 			// map frame N to frame N - 1
-            std::string fidStr = std::to_string((frameIdx + hackOptions.outputMaxCount - 1) % hackOptions.outputMaxCount);
+            std::string fidStr = std::to_string(
+                (frameIdx + hackOptions.FramesToCapture - 3) % hackOptions.FramesToCapture // 0 to 14
+				+ hackOptions.batchIndex * hackOptions.FramesToCapture // 0 to 59
+            );
             // align frame number to 3 digits, e.g. "3" to "003" for cleaner folder view.
             std::string frameIdStr = std::string(3 /* format length */ - fidStr.length(), '0') + fidStr;
 
@@ -614,20 +611,23 @@ StreamlineSample::StreamlineSample(
     deviceManager->m_callbacks.afterPresent  = [this](donut::app::DeviceManager &m, uint32_t frameIdx) {
 
         if (hackOptions.enableHack && hackOptions.storeOutput && // should store
-            frameIdx >= hackOptions.FramesToReplay && // have skipped dummy frames
-            frameIdx < hackOptions.outputMaxCount + hackOptions.FramesToReplay) // within range
+            frameIdx >= hackOptions.FramesToWarmup && // have skipped dummy frames
+            frameIdx < hackOptions.FramesToCapture + hackOptions.FramesToWarmup) // within range
         {
             HWND hWnd = glfwGetWin32Window(m.GetWindow());
 
             // map frame N to frame N - 1
-            std::string fidStr = std::to_string((frameIdx + hackOptions.outputMaxCount - 1) % hackOptions.outputMaxCount);
+            std::string fidStr = std::to_string(
+                (frameIdx + hackOptions.FramesToCapture - 3) % hackOptions.FramesToCapture // 0 to 14
+                + hackOptions.batchIndex * hackOptions.FramesToCapture // 0 to 59
+            );
             // align frame number to 3 digits, e.g. "3" to "003" for cleaner folder view.
             std::string frameIdStr = std::string(3 /* format length */ - fidStr.length(), '0') + fidStr;
 
             std::string filename1 = hackOptions.outPath.string() + "/" +
                 hackOptions.identifier + "_frame" + frameIdStr + "B_fg.exr";
             //CaptureBitBlitLDR(hWnd, filename1);
-            //CaptureFramePoolHDR(filename1);
+            CaptureFramePoolHDR(filename1);
 
         }
         // CaptureBitBlitLDR() and CaptureFramePoolHDR() will handle the synchronization internally.
@@ -888,12 +888,22 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
             hackOptions.frameCount);
 
 
-        if (nFiles < hackOptions.outputMaxCount) {
-            log::error("Expect to run %d frames more than %s frame captures: %d",
-                hackOptions.outputMaxCount, hackPath.generic_string(), nFiles);
+        if (nFiles < hackOptions.frameCount) {
+            log::error("Expect total %d frames more than %s number of input frames: %d",
+                hackOptions.frameCount, hackPath.generic_string(), nFiles);
         }
 
-        for (size_t frameIdx = 0; frameIdx < hackOptions.outputMaxCount; ++frameIdx) {
+        /// Here, we only read 3 (for warm up) + 15 inputs.
+        /// e.g. if batchIndex = 0 (we want to capture frames 0 to 14), we load frames 0 to 14 
+        /// PLUS frame -3, -2, -1 (57 to 59) for warm up.
+        /// batchIndex: warmupStart
+        /// 0: -3, 1: 12, 2: 27, 3: 42
+        int warmupStart = static_cast<int>(hackOptions.batchIndex * hackOptions.FramesToCapture) - 3;
+        
+        // int + uint = uint, so cast to avoid overflow
+        for (int i = warmupStart; i < warmupStart + static_cast<int>(hackOptions.FramesToReplayTotal); ++i) {
+            // For batch 3, i goes from 42 to 60
+            size_t frameIdx = static_cast<size_t>(i < 0 ? i + hackOptions.frameCount : i) % hackOptions.frameCount;
             auto& filePath = filePaths[frameIdx];
 
             std::shared_ptr<donut::engine::TextureData> loadedTexture = 
@@ -902,6 +912,7 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
             hackLoadedData.push_back(loadedTexture);
         }
 
+        assert(hackLoadedData.size() == hackOptions.FramesToReplayTotal);
         return filePaths;
     };
 
@@ -1970,7 +1981,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
 
     // Earliest time to copy per-frame data to hack RT. Must come after above GBuffer render which clears all RTs.
     if (hackOptions.enableHack) {
-        uint32_t hackFrameId = GetFrameIndex() % hackOptions.outputMaxCount;
+        uint32_t hackFrameId = GetFrameIndex() % hackOptions.FramesToReplayTotal;
 
         const TextureSubresourceData& layoutHDR = hackLoadedColorsHDR[hackFrameId]->dataLayout[0][0];
         m_CommandList->writeTexture(m_RenderTargets->hackHdrColor, 0, 0,
@@ -2084,7 +2095,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         float4x4 projection = perspProjD3DStyleReverse(dm::radians(m_CameraVerticalFov), aspectRatio, zNear);
 
         float2 jitterOffset = hackOptions.enableHack ?
-            hackLoadedJitterOffsets[GetFrameIndex() % hackOptions.outputMaxCount] :
+            hackLoadedJitterOffsets[GetFrameIndex() % hackOptions.FramesToReplayTotal] :
             std::dynamic_pointer_cast<PlanarView, IView>(m_View)->GetPixelOffset();
 
         sl::Constants slConstants = {};
@@ -2111,7 +2122,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
 
         // will cause error if SetSLConsts() on those duplicate frame 0
         //if (GetFrameIndex() > 0 ||
-        //    GetDeviceManager()->FramesToReplay == hackOptions.FramesToReplay)
+        //    GetDeviceManager()->FramesToWarmup == hackOptions.FramesToWarmup)
         if (GetFrameIndex() > 0)
         {
         }
@@ -2368,10 +2379,9 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     GetDevice()->executeCommandList(m_CommandList);
 
     // EXPORT: backend export disabled because it cannot capture FG frames
-    //if (GetFrameIndex() < hackOptions.outputMaxCount)
     if (false && hackOptions.enableHack && hackOptions.storeOutput && // should store
-        GetFrameIndex() >= hackOptions.FramesToReplay && // have skipped dummy frames
-        GetFrameIndex() < hackOptions.outputMaxCount + hackOptions.FramesToReplay) // within range
+        GetFrameIndex() >= hackOptions.FramesToWarmup && // have skipped dummy frames
+        GetFrameIndex() < hackOptions.FramesToWarmup + hackOptions.FramesToCapture) // within range
     {
         auto filePath = hackOptions.outPath;
         if (!std::filesystem::exists(filePath)) {
@@ -2443,7 +2453,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
 
     // CLOSE: early close when we store hack output; 
     // run several more frame to avoid strange frame sync error under fullscreen mode, which causes the system to freeze.
-    if (hackOptions.storeOutput && GetFrameIndex() == hackOptions.FramesToReplay + hackOptions.outputMaxCount + 5)
+    if (hackOptions.storeOutput && GetFrameIndex() == hackOptions.FramesToReplayTotal + 5)
     {
         if (!hash_bin.empty()) {
             log::info("Saving %d captured frames in the end.", hash_bin.size());

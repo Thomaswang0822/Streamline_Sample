@@ -308,11 +308,12 @@ public:
         bool parseJitter = false;
         std::vector<std::filesystem::path>  hackPaths = {};
         bool storeOutput = false;
-        size_t outputMaxCount = 0;
+        size_t batchIndex = 0;
         std::filesystem::path outPath = "";
 
         // INTERNAL, should not be set directly. Set by counting exr files in hackPaths
         size_t frameCount = 0;
+        size_t totalBatches = 0;
         /**
          * @brief INTERNAL, for sleep bubble trick.
          * Each Present Callback should take 2 * StoreDelay seconds, and Present() will evenly 
@@ -336,7 +337,10 @@ public:
          * @brief INTERNAL, used for DLSS-G cold start problem.
          * See StreamlineSample() constructor where we set Present callback to see how it works
          */
-        constexpr static uint32_t FramesToReplay = 3;
+        constexpr static uint32_t FramesToWarmup = 3;
+        constexpr static uint32_t FramesToCapture = 15;
+        /// plus one more safety frame in the end to ensure last captured frame is correctly computed.
+        constexpr static uint32_t FramesToReplayTotal = 19;
     } hackOptions;
     // read-only data storage to copy from; copy dst are RTs defined in RenderTargets.h and GBuffer.h
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedColorsHDR;

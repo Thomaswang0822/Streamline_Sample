@@ -264,7 +264,6 @@ int main(int __argc, const char* const* __argv)
     // manual change for DEBUG
     //hackOptions.enableHack = false;
     //hackOptions.storeOutput = false;
-    hackOptions.outputMaxCount = 60;
     //hackOptions.identifier = "WITH_DEPTH";
     
     if (hackOptions.enableHack) {
@@ -310,7 +309,7 @@ int main(int __argc, const char* const* __argv)
 #endif
     // copy necessary hack options to deviceManager
     deviceManager->enableHack = hackOptions.enableHack;
-	//deviceManager->FramesToReplay = hackOptions.FramesToReplay;
+	//deviceManager->FramesToWarmup = hackOptions.FramesToWarmup;
 
     if (!deviceManager->CreateWindowDeviceAndSwapChain(deviceParams, windowTitle.c_str()))
     {
