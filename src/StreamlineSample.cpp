@@ -152,29 +152,25 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
             assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
                 "-HackPaths requires a input to be provided (usage: -HackPaths <input>");
 
-            // store 3 paths: default NPP_JI, NPP_GT, MVD_JI
+            // store 2 paths: default NPP_JI, MVD_JI
             options.hackPaths.push_back(std::filesystem::path(argList[currentArg + 1]));
             const auto nTargets = count_exr_files(std::filesystem::path(options.hackPaths[0]));
-
-            // path += string works but path + string does not.
-            auto gtPath = options.hackPaths.front().parent_path() += "/NPP_GT";
-            assert(std::filesystem::exists(gtPath), "4k ground truth exr files must be stored in %s", gtPath.c_str());
-            options.hackPaths.push_back(gtPath);
-            const auto gtCount = count_exr_files(std::filesystem::path(options.hackPaths[1]));
 
             auto jitterPath = options.hackPaths.front().parent_path() += "/MVD_JI";
             assert(std::filesystem::exists(jitterPath), "Encoded MVs and Depths exr files must be stored in %s", jitterPath.c_str());
             options.hackPaths.push_back(jitterPath);
-            const auto jitterCount = count_exr_files(std::filesystem::path(options.hackPaths[2]));
+            const auto jitterCount = count_exr_files(std::filesystem::path(options.hackPaths[1]));
 
-            assert(nTargets == gtCount && nTargets == jitterCount,
-                "frame capture count and jitter count of (%s) (%s) (%s) should match, but got %d, %d, and %d",
-                options.hackPaths[0].c_str(), options.hackPaths[1].c_str(), options.hackPaths[2].c_str(),
+            assert(nTargets == jitterCount,
+                "frame capture count and jitter count of (%s) (%s) should match, but got %d and %d",
+                options.hackPaths[0].c_str(), options.hackPaths[1].c_str(),
                 nTargets, gtCount, jitterCount);
 
             // IMPORTANT: internal member frameCount and totalBatches can ONLY be set here.
             options.frameCount = nTargets;
-            options.totalBatches = nTargets / HackOptionDef::FramesToCapture;
+            options.totalBatches = nTargets / HackOptionDef::FramesToCapture +
+                (nTargets % HackOptionDef::FramesToCapture > 0); // round up
+            assert(options.totalBatches > 0, "options.totalBatches should be at least 1");
 
             currentArg++;
             continue;
@@ -384,6 +380,14 @@ bool StreamlineSample::SaveIfUniqueTexture(winrt::com_ptr<ID3D11Device> device, 
 
         hash_bin.emplace(hash64, std::move(frameData));
     }
+    else if (hackOptions.totalBatches == 1 
+        && GetFrameIndex() >= hackOptions.FramesToWarmup + hackOptions.FramesToCapture ) 
+    {
+        /// A very rare and special case, total inputs < 15, e.g. 10, then the 3 + 15 + 1 frames loaded will be 
+        /// (warnup 7 8 9) (capture 0 to 9, 0 to 4), (safety 5),
+        /// we need to igore those duplications.
+        uniqueHash = true;
+    }
     
     // final cleanup no matter success or not
     context->Unmap(stagingTexture.get(), 0);
@@ -587,18 +591,21 @@ StreamlineSample::StreamlineSample(
         NVWrapper::Get().ReflexCallback_PresentStart(m, frameIdx);
         
         if (hackOptions.enableHack && hackOptions.storeOutput && // should store
-            frameIdx >= hackOptions.FramesToWarmup && // have skipped dummy frames
+            frameIdx >= hackOptions.FramesToWarmup && // have skipped warmup frames
             frameIdx < hackOptions.FramesToCapture + hackOptions.FramesToWarmup) // within range
         {
             HWND hWnd = glfwGetWin32Window(m.GetWindow());
 
 			// map frame N to frame N - 1
-            std::string fidStr = std::to_string(
-                (frameIdx + hackOptions.FramesToCapture - 3) % hackOptions.FramesToCapture // 0 to 14
-				+ hackOptions.batchIndex * hackOptions.FramesToCapture // 0 to 59
-            );
+            uint32_t fid = (frameIdx + hackOptions.FramesToCapture - hackOptions.FramesToWarmup - 1) % hackOptions.FramesToCapture // 0 to 14
+                + hackOptions.batchIndex * hackOptions.FramesToCapture; // 0 to 59
+            if (fid >= hackOptions.frameCount) {
+                // if frameCount = 50, frame 50-59 does not exist
+                return;
+            }
             // align frame number to 3 digits, e.g. "3" to "003" for cleaner folder view.
-            std::string frameIdStr = std::string(3 /* format length */ - fidStr.length(), '0') + fidStr;
+            std::string frameIdStr = std::string(3 /* format length */ - std::to_string(fid).length(), '0') 
+                + std::to_string(fid);
 
             std::string filename0 = std::filesystem::absolute(hackOptions.outPath).string() + "/" +
                 hackOptions.identifier + "_frame" + frameIdStr + "A_og.exr";
@@ -611,18 +618,22 @@ StreamlineSample::StreamlineSample(
     deviceManager->m_callbacks.afterPresent  = [this](donut::app::DeviceManager &m, uint32_t frameIdx) {
 
         if (hackOptions.enableHack && hackOptions.storeOutput && // should store
-            frameIdx >= hackOptions.FramesToWarmup && // have skipped dummy frames
+            frameIdx >= hackOptions.FramesToWarmup && // have skipped warmup frames
             frameIdx < hackOptions.FramesToCapture + hackOptions.FramesToWarmup) // within range
         {
             HWND hWnd = glfwGetWin32Window(m.GetWindow());
 
             // map frame N to frame N - 1
-            std::string fidStr = std::to_string(
-                (frameIdx + hackOptions.FramesToCapture - 3) % hackOptions.FramesToCapture // 0 to 14
-                + hackOptions.batchIndex * hackOptions.FramesToCapture // 0 to 59
-            );
+            uint32_t fid = (frameIdx + hackOptions.FramesToCapture - hackOptions.FramesToWarmup - 1) % hackOptions.FramesToCapture // 0 to 14
+                + hackOptions.batchIndex * hackOptions.FramesToCapture; // 0 to 59
+            if (fid >= hackOptions.frameCount) {
+                // if frameCount = 50, frame 50-59 does not exist
+                NVWrapper::Get().ReflexCallback_PresentEnd(m, frameIdx);
+                return;
+            }
             // align frame number to 3 digits, e.g. "3" to "003" for cleaner folder view.
-            std::string frameIdStr = std::string(3 /* format length */ - fidStr.length(), '0') + fidStr;
+            std::string frameIdStr = std::string(3 /* format length */ - std::to_string(fid).length(), '0')
+                + std::to_string(fid);
 
             std::string filename1 = hackOptions.outPath.string() + "/" +
                 hackOptions.identifier + "_frame" + frameIdStr + "B_fg.exr";
@@ -878,9 +889,7 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
         }();
             
         std::vector<std::filesystem::path> filePaths;
-        bool shouldParseJitter = dtype == hackDataType::COLOR_HDR && hackOptions.parseJitter;
-        size_t nFiles = textureCache->TraverseFolderPath(
-            hackPath, filePaths, shouldParseJitter, hackLoadedJitterOffsets, ".exr");
+        size_t nFiles = textureCache->TraverseFolderPath(hackPath, filePaths);
         // double check
         assert(nFiles == hackOptions.frameCount,
             "#input files counted by TraverseFolder() (%d) and lambda function in parser (%d) don't match.",
@@ -893,16 +902,17 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
                 hackOptions.frameCount, hackPath.generic_string(), nFiles);
         }
 
-        /// Here, we only read 3 (for warm up) + 15 inputs.
+        /// Here, we ALWAYS read 3 (for warm up) + 15 + 1 (for computing last 15th frame correctly) inputs.
         /// e.g. if batchIndex = 0 (we want to capture frames 0 to 14), we load frames 0 to 14 
         /// PLUS frame -3, -2, -1 (57 to 59) for warm up.
         /// batchIndex: warmupStart
         /// 0: -3, 1: 12, 2: 27, 3: 42
         int warmupStart = static_cast<int>(hackOptions.batchIndex * hackOptions.FramesToCapture) - 3;
         
-        // int + uint = uint, so cast to avoid overflow
+        /// For last batch, e.g. frameCount = 50, we go from 42 to 49 then wrap around
+        /// 
+        /// int + uint = uint, so cast to avoid overflow
         for (int i = warmupStart; i < warmupStart + static_cast<int>(hackOptions.FramesToReplayTotal); ++i) {
-            // For batch 3, i goes from 42 to 60
             size_t frameIdx = static_cast<size_t>(i < 0 ? i + hackOptions.frameCount : i) % hackOptions.frameCount;
             auto& filePath = filePaths[frameIdx];
 
@@ -913,12 +923,18 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
         }
 
         assert(hackLoadedData.size() == hackOptions.FramesToReplayTotal);
+
+        if (dtype == hackDataType::COLOR_HDR && hackOptions.parseJitter) {
+            // should parse jitter
+            textureCache->LoadJitterFromFileLists(filePaths, hackLoadedJitterOffsets,
+                hackOptions.FramesToReplayTotal, hackOptions.FramesToCapture);
+        }
         return filePaths;
     };
 
     auto exrFiles = loadFrameCaptures(hackOptions.hackPaths[0], hackDataType::COLOR_HDR);
-    auto mvFiles = loadFrameCaptures(hackOptions.hackPaths[2], hackDataType::MOTION_VECTORS);
-    auto depthFiles = loadFrameCaptures(hackOptions.hackPaths[2], hackDataType::GBUFFER_DEPTH);
+    auto mvFiles = loadFrameCaptures(hackOptions.hackPaths[1], hackDataType::MOTION_VECTORS);
+    auto depthFiles = loadFrameCaptures(hackOptions.hackPaths[1], hackDataType::GBUFFER_DEPTH);
 
     return true;
 }

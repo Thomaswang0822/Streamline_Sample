@@ -27,6 +27,11 @@ Finally, go back to [StreamlineSample.cpp](src/StreamlineSample.cpp). Now VS sho
 
 Unlike our AMD FSR Offline Runner, this app doesn't have loading config from json feature. The only way to specify runtime options is through cmdline args.
 
+LATEST UPDATE: we deprecated the `OutputMaxCount` option for these 2 reasons:
+
+1. It is more for a developer convenience (myself) but has little help in production use case. It should be moved in a "Release" product anyway.
+2. To solve a tricky bug, we adpoted a multi-run approach (see [this section](#bypass-dlfg-frame-rate-check)), and keep supporting `OutputMaxCount` would make handling frame number very tricky.
+
 It works almost the same. Below is copied from FSR Offline Runner README.
 
 - EnableHack: a global switch, default false. If false, the app will run in its original behavior, rendering Sponza Palace.
@@ -35,7 +40,7 @@ It works almost the same. Below is copied from FSR Offline Runner README.
 - ParseJitter: whether to parse and use the jitter data from input filenames, default false. Currently we only have it in 1K inputs, so it will be forced to false it render resolution is not 1K.
 - HackPaths: **a single folder relative path** to the input frame capture folder, default *"../media/TEST_SCENE/NPP_JI"*. The path to the encoded MVs and Depths will be constructed automatically by replacing "NPP_JI" to "MVD_JI".
 - StoreOutput: whether to store output (screenshots), default false.
-- OutputMaxCount: number of frames to take screenshots, default 0. When StoreOutput is true and OutputMaxCount is missing or bigger than number of input frames, it will default to capture all frames.
+- BatchIndex: each batch is 15 frames captured. For example, a 60-frame scene requires 4 runs with BatchIndex from 0 to 3. See [this section](#bypass-dlfg-frame-rate-check) for more details.
 - OutputPath: **a single folder relative path** to the output screenshots folder, like *"../media/TEST_SCENE/outputs"*
 
 ```shell
@@ -47,14 +52,14 @@ It works almost the same. Below is copied from FSR Offline Runner README.
                         -ParseJitter \
                         -HackPaths "../media/TEST_SCENE/NPP_JI" \
                         -StoreOutput \
-                        -OutputMaxCount 5 \
+                        -BatchIndex [0-3] \
                         -OutputPath "../media/TEST_SCENE/outputs"
 ```
 
 Also, it would be very convenient to set them up in the VS Debugger such that each test run is a one-click. Put this single-line arg list to StreamlineSample  Property Pages, in Configuration Properties -> Debugging -> Commandline Arguments. Adjust if needed. Make sure the `OutputPath` (e.g. `media/TEST_SCENE/screenshots`) exists.
 
 ```shell
--EnableHack -Identifier FG_TEST -RenderResolution 1 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -OutputMaxCount 10 -OutputPath "../media/TEST_SCENE/screenshots"
+-EnableHack -Identifier FG_TEST -RenderResolution 1 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -BatchIndex 2 -OutputPath "../media/TEST_SCENE/screenshots"
 ```
 
 ## Tips
@@ -103,3 +108,21 @@ We deprecated "sleep bubble" trick, and used image hash on the frame data we jus
 When a duplication occurs, the capture thread simply sleeps for `DuplicateTimeout`. In theory, this could be as short as frame rate (e.g. 1/60 sec), but we found giving it a slightly bigger value (current choice is 500 ms = 0.5 sec) is better. Writing a 4K HDR image takes about the same time, and thus the actual frame rate when we take capture is equally slow.
 
 In the end, we prepared a batch script and a Python helper script to perform a test run. It repeats 5/10 runs on the same input (Cmdline args for hack options) and double-confirm no duplication exists in the captured outputs.
+
+## Bypass DLFG Frame Rate Check
+
+Previously when debugging, to speed up each run, we only loaded 10/60 of total input frames (and this is where the deprecated `OutputMaxCount` option originated). After using all 60 inputs, we found a critical issue:
+
+```console
+WARNING: [13-53-08][streamline][warn][tid:30096][41s:619ms:032us]dlfgPresent.cpp:1260[presentCommon] Frame rate over 100.00ms, reseting frame timer
+```
+
+After some careful experiments, we found that this 100 ms or 10 FPS redline would be reached if we do ANYTHING additional in a regular pipeline. The result of frame timer being reset is that dlfg will disable presenting FG frames, and thus breaks our screen capture design entirely.
+
+We've tried to postpone the file IO to app shutdown, since taking screen capture is essentially a screen-to-memory + memory-to-file 2-step operation. But screen-to-memory itself must be done on-the-fly. And as we said, it would make the frame rate too slow.
+
+Fortunately, frame rate can only be measured after some frames have been presented, and this number for dlfg is about 20. Thus, our solution is what I called "multi-run batch captures" approach. Put it simple, each run of the app only captures 15 frames, and we run the app multiple times but reading in different input batches. Together they become full N frames of output.
+
+A cmdline option `BatchIndex` has been added to support the above feature. **NOTE: Users should know the total number of input frames and pass in the correct 0-indexed `BatchIndex`.** But don't forget this counting can be automated by the caller script, which is the typical use case. For example, for a scene with 80 input frames, it requires 6 runs with `BatchIndex` from 0 to 5.
+
+Low-level edge-case details like incomplete batch (batch 5 should capture frame 75 to 79 in the example) and head/tail frame correctness (yes, we will read some "safety frames" in addition to ensure they are computed with their neighbor frames) are handled and users don't need to worry about them.

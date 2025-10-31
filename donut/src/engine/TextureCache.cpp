@@ -1063,15 +1063,12 @@ std::shared_ptr<LoadedTexture> TextureCache::LoadTextureFromMemoryDeferred(
 
 int TextureCache::TraverseFolderPath(
     const std::filesystem::path& folderPath, 
-    std::vector<std::filesystem::path>& outPaths, 
-    bool extractJitter,
-    std::vector<float2>& jitterXY,
-    std::string extension)
+    std::vector<std::filesystem::path>& outPaths)
 {
     /// vfs::IFileSystem works relative to project root, i.e. "/media/whatever"
     /// while cwd is at _build/, i.e. "../media/whatever"
     std::filesystem::path ifsPath(folderPath.string().substr(2));
-    int count = m_fs->enumerateFiles(ifsPath, { extension },
+    int count = m_fs->enumerateFiles(ifsPath, { ".exr" },
         [&folderPath, &outPaths](std::string_view name)
         {
             // but still output correct relative path for tinyexr to use
@@ -1081,41 +1078,65 @@ int TextureCache::TraverseFolderPath(
     // Sort files to ensure proper frame order (assuming filenames contain frame numbers)
     std::sort(outPaths.begin(), outPaths.end());
 
-    // Then iterate the sorted list to keep the jitter order consistent
-    if (extractJitter)
-    {
-        // this func is also called when reading MV and Depths, so we clear conditionally.
-        jitterXY.clear();
-        for (const auto& entry : outPaths)
-        {
-            /// Example: NPP_beauty_2472_0000_0_-0.40563965_-0.35599041
-            /// NOTE: both XY are .8f with range in [-0.5, 0.5]
-            try
-            {
-                std::string pathStr = entry.stem().generic_string();
-
-                size_t lastDelim = pathStr.find_last_of('_');
-                size_t secondLastDelim = pathStr.find_last_of('_', lastDelim - 1);
-                if (lastDelim == std::string::npos || secondLastDelim == std::string::npos)
-                    donut::log::error("EXR jitter filename %ls does not have expected number of underscores.", pathStr);
-
-                // 2nd-last X, last Y
-                jitterXY.push_back(float2(
-                    std::stof(pathStr.substr(secondLastDelim + 1, lastDelim - secondLastDelim - 1)), 
-                    std::stof(pathStr.substr(lastDelim + 1)) 
-                ));
-            }
-            catch (const std::exception& e)
-            {
-                donut::log::error("%s", e.what());
-            }
-        }
-    }
-
-
     return outPaths.size();
 }
 
+void TextureCache::LoadJitterFromFileLists(
+    const std::vector<std::filesystem::path>& FilePaths, 
+    std::vector<donut::math::float2>& jitterXY,
+    const uint32_t FramesToReplayTotal,
+    const uint32_t FramesToCapture)
+{
+    // Then iterate the sorted list to keep the jitter order consistent
+    // this func is also called when reading MV and Depths, so we clear conditionally.
+    jitterXY.clear();
+    for (const auto& entry : FilePaths)
+    {
+        /// Example: NPP_beauty_2472_0000_0_-0.40563965_-0.35599041
+        /// NOTE: both XY are .8f with range in [-0.5, 0.5]
+        try
+        {
+            std::string pathStr = entry.stem().generic_string();
+
+            size_t lastDelim = pathStr.find_last_of('_');
+            size_t secondLastDelim = pathStr.find_last_of('_', lastDelim - 1);
+            if (lastDelim == std::string::npos || secondLastDelim == std::string::npos)
+                donut::log::error("EXR jitter filename %ls does not have expected number of underscores.", pathStr);
+
+            // 2nd-last X, last Y
+            jitterXY.push_back(float2(
+                std::stof(pathStr.substr(secondLastDelim + 1, lastDelim - secondLastDelim - 1)),
+                std::stof(pathStr.substr(lastDelim + 1))
+            ));
+        }
+        catch (const std::exception& e)
+        {
+            donut::log::error("%s", e.what());
+        }
+    }
+
+    const size_t nFiles = jitterXY.size();
+    /// But make sure we at least FramesToReplayTotal = 19 entries.
+    /// This will happen ONLY IF we have < 19 input files.
+    /// 
+    /// First make the middle part (frames to be captured) to
+    if (nFiles < FramesToReplayTotal)
+    {
+        size_t index = 0;
+        while (jitterXY.size() < FramesToCapture) {
+            jitterXY.push_back(jitterXY[index]);
+			index = (index + 1) % nFiles;
+        }
+        // then make 15 to 18
+        auto safetyJitter = jitterXY.back();
+        // preprend last 3 entries as warmup frames
+        jitterXY.insert(jitterXY.begin(), jitterXY.end() - 3, jitterXY.end());
+        // append first entries as safety frame
+        jitterXY.push_back(safetyJitter);
+	}
+	assert(jitterXY.size() >= FramesToReplayTotal);
+    return;
+}
 
 std::shared_ptr<TextureData> TextureCache::GetLoadedTexture(std::filesystem::path const& path)
 {

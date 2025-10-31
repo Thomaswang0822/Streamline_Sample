@@ -306,7 +306,7 @@ public:
             RR_4K = 4
         } renderResolution = HackRenderResolution::RR_1K;
         bool parseJitter = false;
-        std::vector<std::filesystem::path>  hackPaths = {};
+        std::vector<std::filesystem::path> hackPaths = {};
         bool storeOutput = false;
         size_t batchIndex = 0;
         std::filesystem::path outPath = "";
