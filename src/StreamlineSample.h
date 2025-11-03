@@ -331,7 +331,7 @@ public:
          * NOTE: dlfg.cpp (closed source) has a 100ms timeout before reset frame timer,
          * thus DuplicateTimeout * DuplicateMaxRetry cannot exceed 100ms, otherwise the app freezes.
          */
-        constexpr static std::chrono::milliseconds DuplicateTimeout{ 10 };
+        constexpr static std::chrono::milliseconds DuplicateTimeout{ 50 };
         constexpr static uint32_t DuplicateMaxRetry = 5;
         /**
          * @brief INTERNAL, used for DLSS-G cold start problem.

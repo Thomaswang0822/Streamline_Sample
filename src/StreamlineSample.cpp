@@ -381,11 +381,12 @@ bool StreamlineSample::SaveIfUniqueTexture(winrt::com_ptr<ID3D11Device> device, 
         hash_bin.emplace(hash64, std::move(frameData));
     }
     else if (hackOptions.totalBatches == 1 
-        && GetFrameIndex() >= hackOptions.FramesToWarmup + hackOptions.FramesToCapture ) 
+        && GetFrameIndex() >= hackOptions.FramesToWarmup + hackOptions.frameCount ) 
     {
-        /// A very rare and special case, total inputs < 15, e.g. 10, then the 3 + 15 + 1 frames loaded will be 
+        /// A very rare and special case, total inputs (frameCount) < 15, 
+        /// e.g. 10, then the 3 + 15 + 1 frames loaded will be 
         /// (warnup 7 8 9) (capture 0 to 9, 0 to 4), (safety 5),
-        /// we need to igore those duplications.
+        /// we need to igore those duplications 0-4.
         uniqueHash = true;
     }
     
@@ -429,7 +430,7 @@ void StreamlineSample::CaptureFramePoolHDR(const std::string filename)
     for (uint32_t rep = 0; rep < hackOptions.DuplicateMaxRetry; rep++) {
         // sync wait, signature:
         // bool wait(DWORD dwMilliseconds = INFINITE, BOOL bAlertable = FALSE) const WI_NOEXCEPT
-        captureEvent.wait(50 /* timeout millisec */);
+        captureEvent.wait(500 /* timeout millisec */);
 
         // We may get nothing within the timeout
         if (frame == nullptr) {
@@ -2474,6 +2475,10 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         if (!hash_bin.empty()) {
             log::info("Saving %d captured frames in the end.", hash_bin.size());
             for (const auto& [hashKey, frameData] : hash_bin) {
+                if (frameData.filename.find("fg.exr") == std::string::npos) {
+                    // we don't write rendered frame to FS
+                    continue;
+                }
                 bool success = SaveStagingTextureDataToEXR(
                     frameData.data.data(),
                     frameData.rowPitch,

@@ -238,7 +238,7 @@ int main(int __argc, const char* const* __argv)
     deviceParams.swapChainSampleCount = 1;
     deviceParams.swapChainBufferCount = 3;
     deviceParams.startFullscreen = false;
-    deviceParams.vsyncEnabled = false;
+    deviceParams.vsyncEnabled = true;
     deviceParams.swapChainFormat = nvrhi::Format::BGRA8_UNORM;
 
 #ifndef NDEBUG
