@@ -119,10 +119,20 @@ WARNING: [13-53-08][streamline][warn][tid:30096][41s:619ms:032us]dlfgPresent.cpp
 
 After some careful experiments, we found that this 100 ms or 10 FPS redline would be reached if we do ANYTHING additional in a regular pipeline. The result of frame timer being reset is that dlfg will disable presenting FG frames, and thus breaks our screen capture design entirely.
 
-We've tried to postpone the file IO to app shutdown, since taking screen capture is essentially a screen-to-memory + memory-to-file 2-step operation. But screen-to-memory itself must be done on-the-fly. And as we said, it would make the frame rate too slow.
+We've tried to postpone the file IO to app shutdown, since taking screen capture is essentially a screen-to-memory + memory-to-file 2-step operation. But screen-to-memory itself must be done on-the-fly. And as we said, itself would make the frame rate too slow.
 
-Fortunately, frame rate can only be measured after some frames have been presented, and this number for dlfg is about 20. Thus, our solution is what I called "multi-run batch captures" approach. Put it simple, each run of the app only captures 15 frames, and we run the app multiple times but reading in different input batches. Together they become full N frames of output.
+Fortunately, frame rate can only be measured after some frames have been presented, and this number for dlfg is about 20. Thus, our solution is what I called "multi-run batch captures" approach. Put it simple, each run of the app only captures 15 frames before dlfg notices the app is running slow, and we launch the app multiple times but reading in different input batches. Together they become full N frames of output.
 
-A cmdline option `BatchIndex` has been added to support the above feature. **NOTE: Users should know the total number of input frames and pass in the correct 0-indexed `BatchIndex`.** But don't forget this counting can be automated by the caller script, which is the typical use case. For example, for a scene with 80 input frames, it requires 6 runs with `BatchIndex` from 0 to 5.
+## Cmdline Option `BatchIndex` and Automated Script
+
+A cmdline option `BatchIndex` has been added to support the above feature. **NOTE: When running without a script (e.g. with VS Debugger), users should know the total number of input frames and pass in the correct 0-indexed `BatchIndex`.** Fortunately, this easy counting + counting can be automated by the provided script, which is the typical use case.
+
+We don't recommend you do so, but our automated script does take cmdline options itself at runtime. i.e. For example, you can use
+
+```sh
+.\run_OneScene.bat Cyberpunk2077_fgTest ".\media\TEST_SCENE\NPP_JI" "..\media\TEST_SCENE\outputs"
+```
+
+In this way, users can use a master script (we didn't provide it) to call the automated script on different test scenes. Our script does NOT support other cmdline options other than `Identifier`, `HackPaths`, and `StoreOutput`, because they should be either fixed at production stage (e.g. `StoreOutput`) or auto-computed (e.g. `BatchIndex`).
 
 Low-level edge-case details like incomplete batch (batch 5 should capture frame 75 to 79 in the example) and head/tail frame correctness (yes, we will read some "safety frames" in addition to ensure they are computed with their neighbor frames) are handled and users don't need to worry about them.
