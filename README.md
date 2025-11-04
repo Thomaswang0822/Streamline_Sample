@@ -1,6 +1,16 @@
 # DLSS Offline Runner
 
-Based on StreamlineSample
+Based on StreamlineSample. For more info on the original app by Nvidia, see <https://github.com/NVIDIA-RTX/Streamline_Sample>
+
+## "Must Read" Contents
+
+This doc contains both important usage guide and optional technical details. Here we only list out the "must read" ones.
+
+- [Project Setup](#project-setup-adapted-from-original-readme)
+- [Install WIL with NuGet](#install-wil-with-nuget)
+- [Cmdline Args](#cmdline-args)
+- [Test Machines and Possible Issue](#test-machines-and-possible-issue)
+- [Cmdline Option `BatchIndex` and Automated Script](#cmdline-option-batchindex-and-automated-script)
 
 ## Project Setup (Adapted from original README)
 
@@ -78,6 +88,19 @@ The former is useful if you want to play with the GUI control panel, because we 
 
 The latter is useful if you want to fix issues unrelated to export. We levarage `sleep_for()` to correctly capture screenshot, thus turning it off can save your time. Also, when export is off, the app keeps running instead of closing after `OutputMaxCount` frames.
 
+## Test Machines and Possible Issue
+
+This offline runner has been tested on the following 2 machines:
+
+- (MT Arch Lab Machine) i5-12400, 6 cores 12 threads 2.50-4.00 GHz; RTX 5080; 4K 60Hz monitor.
+- (My game PC) AMD R9-9950X3D, 16 cores 32 threads 4.3-5.7 GHz; RTX 5090; 4K 240Hz.
+
+While I have tested every feature on both machines as I develop, I cannot 100% guarantee no issue found on other machines. First, both machines equip high-end GPU, and things may not happen in the same way (e.g. frame computed too slow) on a mainstream GPU like RTX 5060. Also, we have found that certain issues had existed (not now on our production release) on one machine but had never occurred on the other. This implies that hardware-dependent issues have occurred and may occur in the future on different machines.
+
+For now, a possible (but quite low chance: after timeout parameter tuning, it didn't occur in 5 test runs) issue is: out of the 60 FG outputs we generated, there could be 1 or 2 rendered frames instead of FG frames. And this issue, if happens, happens unpredicatably across different runs on the same machine, i.e. it's incorrect on random 1 or 2 frames. This can be overcome by simply doing another run and replacing wrong frames with correct ones in the new run. It only ever happened on 5080 Lab Machine. My personal guess is the very different monitor refresh rate (240 vs 60) is the cause, as frame gets displayed and can be captured "more on time" with higher refresh rate.
+
+If any issue occurs, including the above one, and is untolerable, please contact me (<haoxuan.wang@mthreads.com>)
+
 ## True HDR Capture: New Feature and Issue
 
 This "capture-HDR" is branched out from "capture-LDR", with 2 squash merges of all of our attempts to capture the screen in true HDR format. In "capture-LDR" used Windows API `BitBlit()` which only supports LDR capture. Now, we leveraged `winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool` to capture the window content to a DX11 texture, which supports true HDR `RGBA16_FLOAT` format.
@@ -101,13 +124,16 @@ DXGI API being wrapped by `Present()`, is an async call. This means `bool presen
 
 As a result, without special treatment, we end up unpredictably capture frame N-1 for frame N image. It's unpredictable since the error can happen or not happen on different machines, and even across different runs on the same machine. The cause is likely that the actual display async action being queued by frame N-1 `Present()` happens after frame N starts its `TryGetNextFrame()` catcher, thus catching frame N-1.
 
-Our solution is to completely replace this hacky "sleep bubble" trick with something much more robust: duplication detection with image hash. Without "sleep bubble", our capture function cannot catch up with the 60 FPS (actually 120 FPS with FG turned on) frame rate. An extended frame display time let use accurately capture the frame we expect. However, this is nothing compared to image hash, which precisely results in the unique new frame we want.
+Our solution is to completely replace this hacky "sleep bubble" trick with something much more robust: duplication detection with image hash. Previously without "sleep bubble", our capture function could not catch up with the 60 FPS (actually 120 FPS with FG turned on) frame rate. An extended frame display time let us accurately capture the frame we expect. However, this is nothing compared to image hash, which precisely results in the unique new frame we want.
 
 We deprecated "sleep bubble" trick, and used image hash on the frame data we just captured. The key is not to simply compare with the previous frame hash, but to maintain a bin of these hashes. In the end, we ensure the bin has 2N hashes, N for rendered frames and FG frames each. This immediately ensures we get all 2N frames from the renderer, each exactly once.
 
 When a duplication occurs, the capture thread simply sleeps for `DuplicateTimeout`. In theory, this could be as short as frame rate (e.g. 1/60 sec), but we found giving it a slightly bigger value (current choice is 500 ms = 0.5 sec) is better. Writing a 4K HDR image takes about the same time, and thus the actual frame rate when we take capture is equally slow.
 
-In the end, we prepared a batch script and a Python helper script to perform a test run. It repeats 5/10 runs on the same input (Cmdline args for hack options) and double-confirm no duplication exists in the captured outputs.
+In the end, we prepared a batch script and a Python helper script to perform a test run. It repeats 5 or 10 runs on the same input (Cmdline args for hack options) and double-confirm no duplication exists in the captured outputs.
+
+UPDATE: we have provided a new script [run_OneScene.bat](run_OneScene.bat) which extracts per-scene run. It is more powerful and flexible (itself takes cmdline args), and is recommended to use in production case. And our old test script [run_MultiTimes.bat](run_MultiTimes.bat) now simply repeats that several times. And it should be used only for
+confirming correctness on certain machines, not for production.
 
 ## Bypass DLFG Frame Rate Check
 
