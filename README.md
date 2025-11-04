@@ -125,7 +125,7 @@ Fortunately, frame rate can only be measured after some frames have been present
 
 ## Cmdline Option `BatchIndex` and Automated Script
 
-A cmdline option `BatchIndex` has been added to support the above feature. **NOTE: When running without a script (e.g. with VS Debugger), users should know the total number of input frames and pass in the correct 0-indexed `BatchIndex`.** Fortunately, this easy counting + counting can be automated by the provided script, which is the typical use case.
+A cmdline option `BatchIndex` has been added to support the above feature. **NOTE: When running without a script (e.g. with VS Debugger), users should know the total number of input frames and pass in the correct 0-indexed `BatchIndex`.** Fortunately, this easy counting + index computing can be automated by the provided script, which is the typical use case.
 
 We don't recommend you do so, but our automated script does take cmdline options itself at runtime. i.e. For example, you can use
 
@@ -133,6 +133,6 @@ We don't recommend you do so, but our automated script does take cmdline options
 .\run_OneScene.bat Cyberpunk2077_fgTest ".\media\TEST_SCENE\NPP_JI" "..\media\TEST_SCENE\outputs"
 ```
 
-In this way, users can use a master script (we didn't provide it) to call the automated script on different test scenes. Our script does NOT support other cmdline options other than `Identifier`, `HackPaths`, and `StoreOutput`, because they should be either fixed at production stage (e.g. `StoreOutput`) or auto-computed (e.g. `BatchIndex`).
+In this way, users can use a master script (we didn't provide it) to call the automated script on different test scenes. Our script does NOT support other cmdline options other than `Identifier`, `HackPaths`, and `StoreOutput`, because they should be either fixed at production stage (e.g. `StoreOutput`) or internal and auto-computed (e.g. `BatchIndex`).
 
 Low-level edge-case details like incomplete batch (batch 5 should capture frame 75 to 79 in the example) and head/tail frame correctness (yes, we will read some "safety frames" in addition to ensure they are computed with their neighbor frames) are handled and users don't need to worry about them.

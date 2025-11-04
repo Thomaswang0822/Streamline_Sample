@@ -314,34 +314,37 @@ public:
         // INTERNAL, should not be set directly. Set by counting exr files in hackPaths
         size_t frameCount = 0;
         size_t totalBatches = 0;
-        /**
-         * @brief INTERNAL, for sleep bubble trick.
-         * Each Present Callback should take 2 * StoreDelay seconds, and Present() will evenly 
-         * space the display time of rendered frame and FG frame to StoreDelay
-         * 
-         * UPDATE: Previously we have this StoreDelayMS bubble (each rendered frame or FG frame) displays
-         * for StoreDelayMS ms to give us enough time to **accurately** capture frame and avoid duplicates.
-         * Now with image hash to check duplication, we repeat capture until getting a **precisely** new frame.
-         */
-        [[deprecated("Sleep bubble trick should NOT be used when having image hash")]]
-        constexpr static int64_t StoreDelayMS = 2000;
-        /**
-         * @brief INTERNAL, timeout before trying another capture and see if it's a new frame.
-         * 
-         * NOTE: dlfg.cpp (closed source) has a 100ms timeout before reset frame timer,
-         * thus DuplicateTimeout * DuplicateMaxRetry cannot exceed 100ms, otherwise the app freezes.
-         */
-        constexpr static std::chrono::milliseconds DuplicateTimeout{ 50 };
-        constexpr static uint32_t DuplicateMaxRetry = 5;
-        /**
-         * @brief INTERNAL, used for DLSS-G cold start problem.
-         * See StreamlineSample() constructor where we set Present callback to see how it works
-         */
-        constexpr static uint32_t FramesToWarmup = 3;
-        constexpr static uint32_t FramesToCapture = 15;
-        /// plus one more safety frame in the end to ensure last captured frame is correctly computed.
-        constexpr static uint32_t FramesToReplayTotal = 19;
     } hackOptions;
+    // constexpr variables for hack
+    constexpr static uint64_t CaptureTimeoutMS = 100;
+    /**
+     * @brief INTERNAL, for sleep bubble trick.
+     * Each Present Callback should take 2 * StoreDelay seconds, and Present() will evenly
+     * space the display time of rendered frame and FG frame to StoreDelay
+     *
+     * UPDATE: Previously we have this StoreDelayMS bubble (each rendered frame or FG frame) displays
+     * for StoreDelayMS ms to give us enough time to **accurately** capture frame and avoid duplicates.
+     * Now with image hash to check duplication, we repeat capture until getting a **precisely** new frame.
+     */
+    [[deprecated("Sleep bubble trick should NOT be used when having image hash")]]
+    constexpr static int64_t StoreDelayMS = 2000;
+    /**
+ * @brief INTERNAL, timeout before trying another capture and see if it's a new frame.
+ *
+ * NOTE: dlfg.cpp (closed source) has a 100ms timeout before reset frame timer,
+ * thus DuplicateTimeout * DuplicateMaxRetry cannot exceed 100ms, otherwise the app freezes.
+ */
+    constexpr static std::chrono::milliseconds DuplicateTimeout{ 50 };
+    constexpr static uint32_t DuplicateMaxRetry = 5;
+    /**
+     * @brief INTERNAL, used for DLSS-G cold start problem.
+     * See StreamlineSample() constructor where we set Present callback to see how it works
+     */
+    constexpr static uint32_t FramesToWarmup = 3;
+    constexpr static uint32_t FramesToCapture = 15;
+    /// plus one more safety frame in the end to ensure last captured frame is correctly computed.
+    constexpr static uint32_t FramesToReplayTotal = 19;
+
     // read-only data storage to copy from; copy dst are RTs defined in RenderTargets.h and GBuffer.h
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedColorsHDR;
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedMVs;

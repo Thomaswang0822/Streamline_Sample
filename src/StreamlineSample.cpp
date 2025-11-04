@@ -168,8 +168,8 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
 
             // IMPORTANT: internal member frameCount and totalBatches can ONLY be set here.
             options.frameCount = nTargets;
-            options.totalBatches = nTargets / HackOptionDef::FramesToCapture +
-                (nTargets % HackOptionDef::FramesToCapture > 0); // round up
+            options.totalBatches = nTargets / FramesToCapture +
+                (nTargets % FramesToCapture > 0); // round up
             assert(options.totalBatches > 0, "options.totalBatches should be at least 1");
 
             currentArg++;
@@ -381,7 +381,7 @@ bool StreamlineSample::SaveIfUniqueTexture(winrt::com_ptr<ID3D11Device> device, 
         hash_bin.emplace(hash64, std::move(frameData));
     }
     else if (hackOptions.totalBatches == 1 
-        && GetFrameIndex() >= hackOptions.FramesToWarmup + hackOptions.frameCount ) 
+        && GetFrameIndex() >= FramesToWarmup + hackOptions.frameCount ) 
     {
         /// A very rare and special case, total inputs (frameCount) < 15, 
         /// e.g. 10, then the 3 + 15 + 1 frames loaded will be 
@@ -410,7 +410,7 @@ void StreamlineSample::CaptureFramePoolHDR(const std::string filename)
     auto framePool = Direct3D11CaptureFramePool::CreateFreeThreaded(
         m_captureDevice,
         DirectXPixelFormat::R16G16B16A16Float,
-        3,
+        1,  // num of buffers, ensure we either store correct frame or fail (don't store)
         m_captureItem.Size());
     auto session = framePool.CreateCaptureSession(m_captureItem);
 
@@ -427,10 +427,10 @@ void StreamlineSample::CaptureFramePoolHDR(const std::string filename)
     session.StartCapture();
 
     // repeat until we successfully save a unique new frame
-    for (uint32_t rep = 0; rep < hackOptions.DuplicateMaxRetry; rep++) {
+    for (uint32_t rep = 0; rep < DuplicateMaxRetry; rep++) {
         // sync wait, signature:
         // bool wait(DWORD dwMilliseconds = INFINITE, BOOL bAlertable = FALSE) const WI_NOEXCEPT
-        captureEvent.wait(500 /* timeout millisec */);
+        captureEvent.wait(CaptureTimeoutMS);
 
         // We may get nothing within the timeout
         if (frame == nullptr) {
@@ -446,7 +446,7 @@ void StreamlineSample::CaptureFramePoolHDR(const std::string filename)
             break;
         }
         else {
-            std::this_thread::sleep_for(hackOptions.DuplicateTimeout);
+            std::this_thread::sleep_for(DuplicateTimeout);
             // Reset for next capture
             frame = nullptr;
             captureEvent.ResetEvent();
@@ -584,22 +584,22 @@ StreamlineSample::StreamlineSample(
     /// to replace the first FramesToWarmup frames in the first iteration, which are wrong (see above) due to DLSSG cold start.
     /// E.g we have 10 frames, then frames [10, 12] can be used as frames [0, 2]
     /// 
-    /// Also, when calling CaptureBitBlitLDR() at frame t, frame t-1 is what's being
+    /// Also, when calling capture function at frame t, frame t-1 is what's being
     /// Presnet() and captured, probably because Present() is async.
-    /// Thus, we adjust the filename accordingly.
+    /// Thus, we adjust the capture range (4-18 instead of 3-17) and filename accordingly.
 
     deviceManager->m_callbacks.beforePresent = [this](donut::app::DeviceManager& m, uint32_t frameIdx) {
         NVWrapper::Get().ReflexCallback_PresentStart(m, frameIdx);
         
         if (hackOptions.enableHack && hackOptions.storeOutput && // should store
-            frameIdx >= hackOptions.FramesToWarmup && // have skipped warmup frames
-            frameIdx < hackOptions.FramesToCapture + hackOptions.FramesToWarmup) // within range
+            frameIdx >= FramesToWarmup + 1 && // have skipped warmup frames
+            frameIdx <= FramesToCapture + FramesToWarmup) // within range
         {
             HWND hWnd = glfwGetWin32Window(m.GetWindow());
 
 			// map frame N to frame N - 1
-            uint32_t fid = (frameIdx + hackOptions.FramesToCapture - hackOptions.FramesToWarmup - 1) % hackOptions.FramesToCapture // 0 to 14
-                + hackOptions.batchIndex * hackOptions.FramesToCapture; // 0 to 59
+            uint32_t fid = (frameIdx + FramesToCapture - FramesToWarmup - 1) % FramesToCapture // 0 to 14
+                + hackOptions.batchIndex * FramesToCapture; // 0 to 59
             if (fid >= hackOptions.frameCount) {
                 // if frameCount = 50, frame 50-59 does not exist
                 return;
@@ -619,14 +619,14 @@ StreamlineSample::StreamlineSample(
     deviceManager->m_callbacks.afterPresent  = [this](donut::app::DeviceManager &m, uint32_t frameIdx) {
 
         if (hackOptions.enableHack && hackOptions.storeOutput && // should store
-            frameIdx >= hackOptions.FramesToWarmup && // have skipped warmup frames
-            frameIdx < hackOptions.FramesToCapture + hackOptions.FramesToWarmup) // within range
+            frameIdx >= FramesToWarmup + 1 && // have skipped warmup frames
+            frameIdx <= FramesToCapture + FramesToWarmup) // within range
         {
             HWND hWnd = glfwGetWin32Window(m.GetWindow());
 
             // map frame N to frame N - 1
-            uint32_t fid = (frameIdx + hackOptions.FramesToCapture - hackOptions.FramesToWarmup - 1) % hackOptions.FramesToCapture // 0 to 14
-                + hackOptions.batchIndex * hackOptions.FramesToCapture; // 0 to 59
+            uint32_t fid = (frameIdx + FramesToCapture - FramesToWarmup - 1) % FramesToCapture // 0 to 14
+                + hackOptions.batchIndex * FramesToCapture; // 0 to 59
             if (fid >= hackOptions.frameCount) {
                 // if frameCount = 50, frame 50-59 does not exist
                 NVWrapper::Get().ReflexCallback_PresentEnd(m, frameIdx);
@@ -784,11 +784,11 @@ winrt_foundation::IAsyncAction StreamlineSample::CaptureMediaAsync(std::string f
     // Handle minimum display time
     auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - captureStart).count();
-    if (int64_t remainingWait = hackOptions.StoreDelayMS - elapsedMS; remainingWait > 0) {
+    if (int64_t remainingWait = StoreDelayMS - elapsedMS; remainingWait > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
     }
     else {
-        log::error("StoreDelayMS=%d too low, capture took %d ms", hackOptions.StoreDelayMS, elapsedMS);
+        log::error("StoreDelayMS=%d too low, capture took %d ms", StoreDelayMS, elapsedMS);
     }
 }
 
@@ -840,11 +840,11 @@ winrt_foundation::IAsyncAction StreamlineSample::CaptureAppRecordingAsync(std::s
     auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::high_resolution_clock::now() - captureStart).count();
 
-    if (int64_t remainingWait = hackOptions.StoreDelayMS - elapsedMS; remainingWait > 0) {
+    if (int64_t remainingWait = StoreDelayMS - elapsedMS; remainingWait > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
     }
     else {
-        log::error("StoreDelayMS=%d too low, capture took %d ms", hackOptions.StoreDelayMS, elapsedMS);
+        log::error("StoreDelayMS=%d too low, capture took %d ms", StoreDelayMS, elapsedMS);
     }
 }
 
@@ -908,12 +908,12 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
         /// PLUS frame -3, -2, -1 (57 to 59) for warm up.
         /// batchIndex: warmupStart
         /// 0: -3, 1: 12, 2: 27, 3: 42
-        int warmupStart = static_cast<int>(hackOptions.batchIndex * hackOptions.FramesToCapture) - 3;
+        int warmupStart = static_cast<int>(hackOptions.batchIndex * FramesToCapture) - 3;
         
         /// For last batch, e.g. frameCount = 50, we go from 42 to 49 then wrap around
         /// 
         /// int + uint = uint, so cast to avoid overflow
-        for (int i = warmupStart; i < warmupStart + static_cast<int>(hackOptions.FramesToReplayTotal); ++i) {
+        for (int i = warmupStart; i < warmupStart + static_cast<int>(FramesToReplayTotal); ++i) {
             size_t frameIdx = static_cast<size_t>(i < 0 ? i + hackOptions.frameCount : i) % hackOptions.frameCount;
             auto& filePath = filePaths[frameIdx];
 
@@ -923,12 +923,12 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
             hackLoadedData.push_back(loadedTexture);
         }
 
-        assert(hackLoadedData.size() == hackOptions.FramesToReplayTotal);
+        assert(hackLoadedData.size() == FramesToReplayTotal);
 
         if (dtype == hackDataType::COLOR_HDR && hackOptions.parseJitter) {
             // should parse jitter
             textureCache->LoadJitterFromFileLists(filePaths, hackLoadedJitterOffsets,
-                hackOptions.FramesToReplayTotal, hackOptions.FramesToCapture);
+                FramesToReplayTotal, FramesToCapture);
         }
         return filePaths;
     };
@@ -995,7 +995,7 @@ void StreamlineSample::CaptureBitBlitLDR(HWND hWnd, std::string filename) {
         }
         else {
             // duplicate
-            std::this_thread::sleep_for(hackOptions.DuplicateTimeout);
+            std::this_thread::sleep_for(DuplicateTimeout);
         }
     }
 
@@ -1998,7 +1998,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
 
     // Earliest time to copy per-frame data to hack RT. Must come after above GBuffer render which clears all RTs.
     if (hackOptions.enableHack) {
-        uint32_t hackFrameId = GetFrameIndex() % hackOptions.FramesToReplayTotal;
+        uint32_t hackFrameId = GetFrameIndex() % FramesToReplayTotal;
 
         const TextureSubresourceData& layoutHDR = hackLoadedColorsHDR[hackFrameId]->dataLayout[0][0];
         m_CommandList->writeTexture(m_RenderTargets->hackHdrColor, 0, 0,
@@ -2112,7 +2112,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         float4x4 projection = perspProjD3DStyleReverse(dm::radians(m_CameraVerticalFov), aspectRatio, zNear);
 
         float2 jitterOffset = hackOptions.enableHack ?
-            hackLoadedJitterOffsets[GetFrameIndex() % hackOptions.FramesToReplayTotal] :
+            hackLoadedJitterOffsets[GetFrameIndex() % FramesToReplayTotal] :
             std::dynamic_pointer_cast<PlanarView, IView>(m_View)->GetPixelOffset();
 
         sl::Constants slConstants = {};
@@ -2139,7 +2139,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
 
         // will cause error if SetSLConsts() on those duplicate frame 0
         //if (GetFrameIndex() > 0 ||
-        //    GetDeviceManager()->FramesToWarmup == hackOptions.FramesToWarmup)
+        //    GetDeviceManager()->FramesToWarmup == FramesToWarmup)
         if (GetFrameIndex() > 0)
         {
         }
@@ -2397,8 +2397,8 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
 
     // EXPORT: backend export disabled because it cannot capture FG frames
     if (false && hackOptions.enableHack && hackOptions.storeOutput && // should store
-        GetFrameIndex() >= hackOptions.FramesToWarmup && // have skipped dummy frames
-        GetFrameIndex() < hackOptions.FramesToWarmup + hackOptions.FramesToCapture) // within range
+        GetFrameIndex() >= FramesToWarmup && // have skipped dummy frames
+        GetFrameIndex() < FramesToWarmup + FramesToCapture) // within range
     {
         auto filePath = hackOptions.outPath;
         if (!std::filesystem::exists(filePath)) {
@@ -2470,7 +2470,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
 
     // CLOSE: early close when we store hack output; 
     // run several more frame to avoid strange frame sync error under fullscreen mode, which causes the system to freeze.
-    if (hackOptions.storeOutput && GetFrameIndex() == hackOptions.FramesToReplayTotal + 5)
+    if (hackOptions.storeOutput && GetFrameIndex() == FramesToReplayTotal + 5)
     {
         if (!hash_bin.empty()) {
             log::info("Saving %d captured frames in the end.", hash_bin.size());

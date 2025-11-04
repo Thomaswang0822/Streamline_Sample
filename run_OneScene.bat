@@ -47,6 +47,9 @@ if %errorlevel% equ 2 (
     exit /b 0
 )
 
+rem Clear output folder first because we count outputs to confirm no missing.
+del "%OUTPUT_ROOT%\*.exr"
+
 set /a END_INDEX=BATCH_COUNT-1
 for /L %%i in (0, 1, %END_INDEX%) do (
     echo ===== Batch Index %%i =====
