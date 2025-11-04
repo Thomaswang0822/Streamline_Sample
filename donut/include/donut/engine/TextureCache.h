@@ -213,10 +213,13 @@ namespace donut::engine
         
         int TraverseFolderPath(
             const std::filesystem::path& folderPath,
-            std::vector<std::filesystem::path>& outPaths,
-            bool extractJitter,
+            std::vector<std::filesystem::path>& outPaths);
+
+        void LoadJitterFromFileLists(
+            const std::vector<std::filesystem::path>& FilePaths,
             std::vector<donut::math::float2>& jitterXY,
-            std::string extension);
+            const uint32_t FramesToReplayTotal,
+            const uint32_t FramesToCapture);
 
         // Tells if the texture has been loaded from file successfully and its data is available in the texture object.
         // After the texture is finalized and uploaded to the GPU, the data is no longer available on the CPU,

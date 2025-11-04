@@ -238,7 +238,7 @@ int main(int __argc, const char* const* __argv)
     deviceParams.swapChainSampleCount = 1;
     deviceParams.swapChainBufferCount = 3;
     deviceParams.startFullscreen = false;
-    deviceParams.vsyncEnabled = false;
+    deviceParams.vsyncEnabled = true;
     deviceParams.swapChainFormat = nvrhi::Format::BGRA8_UNORM;
 
 #ifndef NDEBUG
@@ -309,7 +309,7 @@ int main(int __argc, const char* const* __argv)
 #endif
     // copy necessary hack options to deviceManager
     deviceManager->enableHack = hackOptions.enableHack;
-	//deviceManager->FramesToReplay = hackOptions.FramesToReplay;
+	//deviceManager->FramesToWarmup = hackOptions.FramesToWarmup;
 
     if (!deviceManager->CreateWindowDeviceAndSwapChain(deviceParams, windowTitle.c_str()))
     {

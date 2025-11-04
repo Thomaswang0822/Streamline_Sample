@@ -39,7 +39,7 @@
 #include "UIData.h"
 #include <random>
 #include <chrono>
-#include <unordered_set>
+#include <unordered_map>
 
 // From Donut
 #include <donut/core/vfs/VFS.h>
@@ -306,48 +306,63 @@ public:
             RR_4K = 4
         } renderResolution = HackRenderResolution::RR_1K;
         bool parseJitter = false;
-        std::vector<std::filesystem::path>  hackPaths = {};
+        std::vector<std::filesystem::path> hackPaths = {};
         bool storeOutput = false;
-        size_t outputMaxCount = 0;
+        size_t batchIndex = 0;
         std::filesystem::path outPath = "";
 
         // INTERNAL, should not be set directly. Set by counting exr files in hackPaths
         size_t frameCount = 0;
-        /**
-         * @brief INTERNAL, for sleep bubble trick.
-         * Each Present Callback should take 2 * StoreDelay seconds, and Present() will evenly 
-         * space the display time of rendered frame and FG frame to StoreDelay
-         * 
-         * UPDATE: Previously we have this StoreDelayMS bubble (each rendered frame or FG frame) displays
-         * for StoreDelayMS ms to give us enough time to **accurately** capture frame and avoid duplicates.
-         * Now with image hash to check duplication, we repeat capture until getting a **precisely** new frame.
-         */
-        [[deprecated("Sleep bubble trick should NOT be used when having image hash")]]
-        constexpr static int64_t StoreDelayMS = 2000;
-        /**
-         * @brief INTERNAL, timeout before trying another capture and see if it's a new frame.
-         * 
-         * NOTE: dlfg.cpp (closed source) has a 100ms timeout before reset frame timer,
-         * thus DuplicateTimeout * DuplicateMaxRetry cannot exceed 100ms, otherwise the app freezes.
-         */
-        constexpr static std::chrono::milliseconds DuplicateTimeout{ 10 };
-        constexpr static uint32_t DuplicateMaxRetry = 5;
-        /**
-         * @brief INTERNAL, used for DLSS-G cold start problem.
-         * See StreamlineSample() constructor where we set Present callback to see how it works
-         */
-        constexpr static uint32_t FramesToReplay = 3;
+        size_t totalBatches = 0;
     } hackOptions;
+    // constexpr variables for hack
+    constexpr static uint64_t CaptureTimeoutMS = 100;
+    /**
+     * @brief INTERNAL, for sleep bubble trick.
+     * Each Present Callback should take 2 * StoreDelay seconds, and Present() will evenly
+     * space the display time of rendered frame and FG frame to StoreDelay
+     *
+     * UPDATE: Previously we have this StoreDelayMS bubble (each rendered frame or FG frame) displays
+     * for StoreDelayMS ms to give us enough time to **accurately** capture frame and avoid duplicates.
+     * Now with image hash to check duplication, we repeat capture until getting a **precisely** new frame.
+     */
+    [[deprecated("Sleep bubble trick should NOT be used when having image hash")]]
+    constexpr static int64_t StoreDelayMS = 2000;
+    /**
+ * @brief INTERNAL, timeout before trying another capture and see if it's a new frame.
+ *
+ * NOTE: dlfg.cpp (closed source) has a 100ms timeout before reset frame timer,
+ * thus DuplicateTimeout * DuplicateMaxRetry cannot exceed 100ms, otherwise the app freezes.
+ */
+    constexpr static std::chrono::milliseconds DuplicateTimeout{ 50 };
+    constexpr static uint32_t DuplicateMaxRetry = 5;
+    /**
+     * @brief INTERNAL, used for DLSS-G cold start problem.
+     * See StreamlineSample() constructor where we set Present callback to see how it works
+     */
+    constexpr static uint32_t FramesToWarmup = 3;
+    constexpr static uint32_t FramesToCapture = 15;
+    /// plus one more safety frame in the end to ensure last captured frame is correctly computed.
+    constexpr static uint32_t FramesToReplayTotal = 19;
+
     // read-only data storage to copy from; copy dst are RTs defined in RenderTargets.h and GBuffer.h
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedColorsHDR;
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedMVs;
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedDepths;
     std::vector<donut::math::float2> hackLoadedJitterOffsets;
 
+    struct FrameData {
+        std::vector<uint8_t> data;
+        const uint32_t rowPitch;
+        const int width;
+        const int height;
+        const std::string filename;
+    };
+
     /**
      * @brief Stores image by xxhash XXH64(). Used for duplication detection after capture before export.
      */
-    std::unordered_set<uint64_t> hash_bin;
+    std::unordered_map<uint64_t, FrameData> hash_bin;
 
     bool LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache);
 

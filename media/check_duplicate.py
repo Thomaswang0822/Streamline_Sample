@@ -6,7 +6,7 @@ import xxhash
 def check_duplicate(path_string: str):
     # Resolve relative path to script location
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    abs_folder_path = os.path.abspath(os.path.join(script_dir, folder_path))
+    abs_folder_path = os.path.abspath(os.path.join(script_dir, path_string))
     
     if not ( os.path.exists(abs_folder_path) and os.path.isdir(abs_folder_path) ):
         print(f"Error: '{abs_folder_path}' does not exist or is not a directory")
