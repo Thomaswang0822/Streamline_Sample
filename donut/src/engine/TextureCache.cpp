@@ -590,8 +590,8 @@ bool TextureCache::hackLoadJitterFromFile(
     {
         uint16_t* fp16Data = reinterpret_cast<uint16_t*>(charData);
         // donut has mvec in pixel space
-        const float ratioX = static_cast<float>(imgWidth);
-        const float ratioY = static_cast<float>(imgHeight);
+        const float ratioX = static_cast<float>(imgWidth)  * 0.5f;
+        const float ratioY = static_cast<float>(imgHeight) * 0.5f;
         auto scaleMV = [](uint16_t value, float ratio) -> uint16_t
             {
                 tinyexr::FP16 half; half.u = value;
