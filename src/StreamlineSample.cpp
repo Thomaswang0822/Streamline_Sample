@@ -460,6 +460,222 @@ void StreamlineSample::CaptureFramePoolHDR(const std::string filename)
 
 }
 
+bool StreamlineSample::CreateCaptureDevice()
+{
+    // Create D3D11 device and Convert it step-by-step to WinRT IDirect3DDevice
+    ComPtr<ID3D11Device> device;
+    HRESULT hr = D3D11CreateDevice(
+        nullptr,
+        D3D_DRIVER_TYPE_HARDWARE,
+        nullptr,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        nullptr,  // D3D_FEATURE_LEVEL*
+        0, // above array size
+        D3D11_SDK_VERSION,
+        &device,
+        nullptr,
+        nullptr // ID3D11DeviceContext*
+    );
+
+    if (FAILED(hr))
+    {
+        log::error("Failed to create D3D11 device: 0x%08X", hr);
+        return false;
+    }
+
+    ComPtr<IDXGIDevice> dxgiDevice;
+    hr = device.As(&dxgiDevice);
+    if (FAILED(hr))
+    {
+        log::error("Failed to convert ID3D11Device to IDXGIDevice: 0x%08X", hr);
+        return false;
+    }
+
+    winrt::com_ptr<IInspectable> inspectableDevice;
+    hr = CreateDirect3D11DeviceFromDXGIDevice(dxgiDevice.Get(), inspectableDevice.put());
+    if (FAILED(hr))
+    {
+        log::error("Failed to create WinRT device from DXGI device: 0x%08X", hr);
+        return false;
+    }
+
+    m_captureDevice = inspectableDevice.as<winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice>();
+
+    return true;
+}
+
+bool StreamlineSample::CreateCaptureItemForWindow()
+{
+    auto window_ptr = GetDeviceManager()->GetWindow();
+    if (window_ptr == nullptr)
+    {
+        log::error("No GLFW window set");
+        return false;
+    }
+    HWND hwnd = glfwGetWin32Window(window_ptr);
+    if (hwnd == nullptr)
+    {
+        log::error("Can't get HWND from GLFW window");
+        return false;
+    }
+    // Use interop interface to create capture item
+    auto interop = winrt::get_activation_factory<winrt::Windows::Graphics::Capture::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
+    winrt::check_hresult(interop->CreateForWindow(
+        hwnd,
+        winrt::guid_of<ABI::Windows::Graphics::Capture::IGraphicsCaptureItem>(),
+        reinterpret_cast<void**>(winrt::put_abi(m_captureItem))
+    ));
+    return true;
+}
+
+bool StreamlineSample::InitializeFramePoolCapture()
+{
+    // 1. Create D3D11 device
+    if (!CreateCaptureDevice() || m_captureDevice == nullptr)
+    {
+        log::error("Failed to create capture device");
+        return false;
+    }
+
+    // 2. Create capture item
+    if (!CreateCaptureItemForWindow() || m_captureItem == nullptr)
+    {
+        log::error("Failed to create capture item");
+        return false;
+    }
+
+    m_captureInitialized = true;
+    return true;
+}
+
+void StreamlineSample::CleanupFramePoolCapture()
+{
+    m_captureItem = nullptr;
+    m_captureDevice = nullptr;
+    m_captureInitialized = false;
+}
+
+/**
+ * Helper to convert Windows::Graphics::DirectX::Direct3D11 resources to native D3D11 resources
+ * 
+ * \param object: We will use IDirect3DDevice and IDirect3DSurface as inputs
+ */
+template<typename T>
+static winrt::com_ptr<T> GetDXGIInterfaceFromObject(winrt::Windows::Foundation::IInspectable const& object)
+{
+    // Cast to the interface access type
+    auto access = object.as<Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+
+    // Get the requested interface
+    winrt::com_ptr<T> result;
+    winrt::check_hresult(access->GetInterface(winrt::guid_of<T>(), result.put_void()));
+    return result;
+}
+
+bool StreamlineSample::SaveTextureToEXR(winrt::com_ptr<ID3D11Device> device, winrt::com_ptr<ID3D11Texture2D> texture, const std::string filename)
+{
+    // Create staging texture
+    D3D11_TEXTURE2D_DESC desc;
+    texture->GetDesc(&desc);
+    const int width = desc.Width;
+    const int height = desc.Height;
+    const size_t bytesPerPixel = 4 * 2; // RGBA16_FLOAT
+    //const size_t rowPitchBytes = width * bytesPerPixel;
+
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = 0;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    desc.MiscFlags = 0;
+
+    winrt::com_ptr<ID3D11Texture2D> stagingTexture;
+    HRESULT hr = device->CreateTexture2D(&desc, nullptr, stagingTexture.put());
+    if (FAILED(hr))
+    {
+        log::error("Failed to create staging texture: 0x%08X", hr);
+        return false;
+    }
+
+    // Copy to staging texture
+    winrt::com_ptr<ID3D11DeviceContext> context;
+    device->GetImmediateContext(context.put());
+    context->CopyResource(stagingTexture.get(), texture.get());
+
+    // Map the staging texture
+    D3D11_MAPPED_SUBRESOURCE mapped;
+    hr = context->Map(stagingTexture.get(), 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(hr))
+    {
+        log::error("Failed to map staging texture: 0x%08X", hr);
+        return false;
+    }
+
+    SaveStagingTextureDataToEXR(mapped.pData, mapped.RowPitch, width, height, filename);
+
+    context->Unmap(stagingTexture.get(), 0);
+    return true;
+}
+
+
+void StreamlineSample::CaptureFramePoolHDR(const std::string filename, const int64_t StoreDelayMS)
+{
+    auto captureStart = std::chrono::high_resolution_clock::now();
+
+    // Grab the apartment context so we can return to it.
+    winrt::apartment_context context;
+
+    auto d3dDevice = GetDXGIInterfaceFromObject<ID3D11Device>(m_captureDevice);
+    winrt::com_ptr<ID3D11DeviceContext> d3dContext;
+    d3dDevice->GetImmediateContext(d3dContext.put());
+
+    // Creating our frame pool with CreateFreeThreaded means that we 
+    // will be called back from the frame pool's internal worker thread
+    // instead of the thread we are currently on. It also disables the
+    // DispatcherQueue requirement.
+    auto framePool = Direct3D11CaptureFramePool::CreateFreeThreaded(
+        m_captureDevice,
+        DirectXPixelFormat::R16G16B16A16Float,
+        1,
+        m_captureItem.Size());
+    auto session = framePool.CreateCaptureSession(m_captureItem);
+
+    wil::shared_event captureEvent(wil::EventOptions::ManualReset);
+    Direct3D11CaptureFrame frame{ nullptr };
+    framePool.FrameArrived([&frame, captureEvent](auto& framePool, auto&)
+        {
+            frame = framePool.TryGetNextFrame();
+
+            // Complete the operation
+            captureEvent.SetEvent();
+        });
+
+    session.StartCapture();
+    // sync wait
+    captureEvent.wait();
+
+    // End the capture
+    session.Close();
+    framePool.Close();
+
+    auto texture = GetDXGIInterfaceFromObject<ID3D11Texture2D>(frame.Surface());
+    assert(texture != nullptr);
+    bool save_success = SaveTextureToEXR(d3dDevice, texture, filename);
+    assert(save_success, "SaveTextureToEXR() failed");
+
+    // Calculate remaining time to meet minimum display duration
+    auto captureEnd = std::chrono::high_resolution_clock::now();
+    auto elapsedMS = std::chrono::duration_cast<std::chrono::milliseconds>(captureEnd - captureStart).count();
+    int64_t remainingWait = StoreDelayMS - elapsedMS;
+    if (remainingWait > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(remainingWait));
+    }
+    else {
+        log::error("StoreDelayMS = %d ms set too low, taking screenshot took %d ms", StoreDelayMS, elapsedMS);
+    }
+
+    return;
+
+}
+
 // Constructor
 StreamlineSample::StreamlineSample(
     DeviceManager* deviceManager,
