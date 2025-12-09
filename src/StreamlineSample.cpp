@@ -937,6 +937,18 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
     auto mvFiles = loadFrameCaptures(hackOptions.hackPaths[1], hackDataType::MOTION_VECTORS);
     auto depthFiles = loadFrameCaptures(hackOptions.hackPaths[1], hackDataType::GBUFFER_DEPTH);
 
+    // DEBUG
+    {
+        //const std::filesystem::path tile_path("../media/TEST_SCENE/TILED_IN");
+        //std::vector<std::filesystem::path> tile_files;
+        //textureCache->TraverseFolderPath(tile_path, tile_files);  // this would be 1
+        //const auto colorSize = hackLoadedColorsHDR.size();
+        //hackLoadedColorsHDR.clear();
+        //std::shared_ptr<donut::engine::TextureData> loadedTiledTexture =
+        //    textureCache->hackLoadTextureFromFile(tile_files[0], hackDataType::COLOR_HDR);
+        //hackLoadedColorsHDR.resize(colorSize, loadedTiledTexture);
+    }
+    
     return true;
 }
 
@@ -2015,9 +2027,10 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
             static_cast<const void*>(hackLoadedDepths[hackFrameId]->data->data()),
             layoutDepth.rowPitch, layoutDepth.depthPitch);
 
+        auto& descHackColor = m_RenderTargets->hackHdrColor->getDesc();
         // MV and depth need to restore resources state after copy; probably because they are not virtual textures
-        auto descHackMV = m_RenderTargets->hackMotionVectors->getDesc();
-        auto descHackDepth = m_RenderTargets->Depth->getDesc();
+        auto& descHackMV = m_RenderTargets->hackMotionVectors->getDesc();
+        auto& descHackDepth = m_RenderTargets->Depth->getDesc();
         m_CommandList->setTextureState(m_RenderTargets->hackMotionVectors, nvrhi::AllSubresources, descHackMV.initialState);
         m_CommandList->setTextureState(m_RenderTargets->hackDepth, nvrhi::AllSubresources, descHackDepth.initialState);
         m_CommandList->commitBarriers();

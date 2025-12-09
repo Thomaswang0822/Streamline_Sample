@@ -393,6 +393,12 @@ bool TextureCache::hackLoadEXRFromFile(
         return false;
     }
 
+    // Since we only accept 1K inputs, warn users if not 1K
+    if (image.width != Width1K || image.height != Height1K) {
+        log::warning("Input %s has size (%d x %d) not exactly 1K. Will see cropped (if bigger) or empty (if smaller) region in renderer", 
+            fileName.c_str(), image.width, image.height);
+    }
+
     // 5. Find RGB channels (assume first 3 channels are RGB)
     int idxR = -1, idxG = -1, idxB = -1, idxA = -1;
     for (int c = 0; c < header.num_channels; c++)
@@ -413,24 +419,96 @@ bool TextureCache::hackLoadEXRFromFile(
         fileName.c_str(), idxR, idxG, idxB);
 
     // 6. Convert to target format
-    const size_t pixelCount = static_cast<size_t>(image.width) * static_cast<size_t>(image.height);
+    const size_t inputPixelCount = static_cast<size_t>(image.width) * static_cast<size_t>(image.height);
 
-    // Get channel pointers; tinyexr use uint16_t = unsigned short for FP16
-    uint16_t* r = idxR != -1 ? reinterpret_cast<uint16_t*>(image.images[idxR]) : nullptr;
-    uint16_t* g = idxG != -1 ? reinterpret_cast<uint16_t*>(image.images[idxG]) : nullptr;
-    uint16_t* b = idxB != -1 ? reinterpret_cast<uint16_t*>(image.images[idxB]) : nullptr;
-    uint16_t* a = idxA >= 0 ? reinterpret_cast<uint16_t*>(image.images[idxA]) : nullptr;
-    assert(r != nullptr && g != nullptr && b != nullptr,
-        "EXR file %ls has null channel pointers when converting to uint16_t: r = %p, g = %p, b = %p",
-        fileName.c_str(), r, g, b);
+    // NEW: Check if the image is tiled
+    bool isTiled = (header.tiled != 0);
+
+    /// These are inputPixelCount-sized planar data for each channel; tinyexr use uint16_t = unsigned short for FP16
+    uint16_t* r = nullptr;
+    uint16_t* g = nullptr;
+    uint16_t* b = nullptr;
+    uint16_t* a = nullptr;
+    std::vector<uint16_t> r_buf, g_buf, b_buf, a_buf;
+
+    if (isTiled)
+    {
+        // Handle tiled EXR - reconstruct image from tiles
+        log::info("Loading tiled EXR: %dx%d with %d tiles", image.width, image.height, image.num_tiles);
+
+        // Allocate buffers for reconstructed image
+        r_buf.resize(inputPixelCount, 0);
+        g_buf.resize(inputPixelCount, 0);
+        b_buf.resize(inputPixelCount, 0);
+        a_buf.resize(idxA >= 0 ? inputPixelCount : 0, 1);
+
+        // Get tile channel data then copy to per-channel planar data.
+        for (int tile_idx = 0; tile_idx < image.num_tiles; tile_idx++)
+        {
+            const EXRTile& tile = image.tiles[tile_idx];
+
+            uint16_t* tile_r = idxR != -1 ? reinterpret_cast<uint16_t*>(tile.images[idxR]) : nullptr;
+            uint16_t* tile_g = idxG != -1 ? reinterpret_cast<uint16_t*>(tile.images[idxG]) : nullptr;
+            uint16_t* tile_b = idxB != -1 ? reinterpret_cast<uint16_t*>(tile.images[idxB]) : nullptr;
+            uint16_t* tile_a = idxA >= 0 ? reinterpret_cast<uint16_t*>(tile.images[idxA]) : nullptr;
+            assert(tile_r != nullptr && tile_g != nullptr && tile_b != nullptr,
+                "Tiled EXR file %ls has null channel pointers when converting to uint16_t: r = %p, g = %p, b = %p",
+                fileName.c_str(), tile_r, tile_g, tile_b);
+
+            /// This works like GPU thread id.
+            /// First we locate the starting index of the tile (like thread block) from offset_x and offset_y (like tb.id)
+            /// Next we copy this width x height tile.
+            /// Also note that tile.width and tile.height represent effective data-window size.
+            /// E.g. 100 x 100 for the corner cell (last one), while it still malloc a same 128x128 memory.
+            size_t start_y = tile.offset_y * header.tile_size_y;
+            size_t start_x = tile.offset_x * header.tile_size_x;
+            for (size_t y = 0; y < tile.height; y++) {
+                for (size_t x = 0; x < tile.width; x++) {
+                    // index current pixel in tile: use tile_size_x instead of width, see above.
+                    size_t tid = y * header.tile_size_x + x;
+                    // index current pixel in global image-size memory
+                    size_t gid = (start_y + y) * image.width + (start_x + x);
+                    r_buf[gid] = tile_r[tid];
+                    g_buf[gid] = tile_g[tid];
+                    b_buf[gid] = tile_b[tid];
+                    if (tile_a)
+                        a_buf[gid] = tile_a[tid];
+                }
+            }
+        }
+
+        // DEBUG CHECK: non-negative RGB fp16 maintains order after cast as uint16_t
+        auto checkMinMax = [](std::vector<uint16_t> vec) -> std::pair<float, float> {
+            auto minmax = std::minmax_element(vec.begin(), vec.end());
+            tinyexr::FP16 fmin{ *minmax.first }, fmax{ *minmax.second };
+            return std::make_pair(tinyexr::half_to_float(fmin).f, tinyexr::half_to_float(fmax).f);
+            };
+        //auto rMinMax = checkMinMax(r_buf);
+        //auto gMinMax = checkMinMax(g_buf);
+        //auto bMinMax = checkMinMax(b_buf);
+
+        // Set pointers to the reconstructed buffers
+        r = r_buf.data();
+        g = g_buf.data();
+        b = b_buf.data();
+        a = (idxA >= 0) ? a_buf.data() : nullptr;
+    }
+    else
+    {
+        // Typical scanline mode
+        r = idxR != -1 ? reinterpret_cast<uint16_t*>(image.images[idxR]) : nullptr;
+        g = idxG != -1 ? reinterpret_cast<uint16_t*>(image.images[idxG]) : nullptr;
+        b = idxB != -1 ? reinterpret_cast<uint16_t*>(image.images[idxB]) : nullptr;
+        a = idxA >= 0 ? reinterpret_cast<uint16_t*>(image.images[idxA]) : nullptr;
+    }
 
     // prepare FP16 1.0f constant
     tinyexr::FP32 fp32_ONE; fp32_ONE.f = 1.0f;
     const uint16_t      fp16_ONE = tinyexr::float_to_half_full(fp32_ONE).u;
 
-    // first malloc byte array: RGBA16_Float is 4 channels x 2 bytes
+    // first malloc byte array to fixed 1K size: RGBA16_Float is 4 channels x 2 bytes
     const size_t bytesPerPixel = 4 * 2;
-    char* finalCharData = static_cast<char*>(malloc(pixelCount * bytesPerPixel));
+    char* finalCharData = static_cast<char*>(malloc(PixelCount1K * bytesPerPixel));
     if (!finalCharData)
     {
         log::error("Failed to allocate memory for EXR texture data.");
@@ -454,12 +532,12 @@ bool TextureCache::hackLoadEXRFromFile(
         return static_cast<uint8_t>(fLDR * 256.f);
         };
     
-    for (size_t i = 0; i < image.height; ++i)
+    for (size_t i = 0; i < std::min((size_t)image.height, Height1K); ++i)
     {
-        for (size_t j = 0; j < image.width; ++j)
+        for (size_t j = 0; j < std::min((size_t)image.width, Width1K); ++j)
         {
             idxSrc = i * image.width + j;
-            idxDst = i * image.width + j;
+            idxDst = i * Width1K + j;
 
             // store directly to uint16_t*
             fp16Data[4 * idxDst + 0] = r[idxSrc];
@@ -471,8 +549,8 @@ bool TextureCache::hackLoadEXRFromFile(
 
     // write output in the end
     *outputData = finalCharData;
-    *width = image.width;
-    *height = image.height;
+    *width = Width1K;
+    *height = Height1K;
     return true;
 }
 
@@ -567,17 +645,19 @@ bool TextureCache::hackLoadJitterFromFile(
         L"EXR file %ls has null channel pointers when converting to uint16_t: r = %p, g = %p, b = %p",
         fileName.c_str(), r, g, b);
 
-    /// Set input, output, and data size.
-    /// Input is always 1k. 
-    /// Data size = input * ratio = render resolution. E.g. when we upscale 2k render to 4k display,
-    ///     we need to "expand" 1k jitter to 2k by interpolation.
-    /// Output = render resolution * m_UpscaleRatio = display resolution. This is how big to malloc.
+    /// Input is usually 1k. 
+    /// Output size is always 1k since now we only support 1k render resolution (thus 1K texture needed).
     const size_t imgWidth = static_cast<size_t>(image.width);
     const size_t imgHeight = static_cast<size_t>(image.height);
-    assert(imgWidth == 1920 && imgHeight == 1080, L"Jitter EXR input must be 1k resolution.");
+    //assert(imgWidth == Width1K && imgHeight == Height1K, L"Jitter EXR input must be 1k resolution.");
+        // Since we only accept 1K inputs, warn users if not 1K
+    if (image.width != Width1K || image.height != Height1K) {
+        log::warning("Input MV %s has size (%d x %d) not exactly 1K. This could lead to ghosting in the FG frames.",
+            fileName.c_str(), image.width, image.height);
+    }
     
     // Allocate raw bytes array first, then reinterpret_cast to FP16 or FP32
-    char* charData = static_cast<char*>(malloc(imgWidth * imgHeight * bytesPerPixel));
+    char* charData = static_cast<char*>(malloc(PixelCount1K * bytesPerPixel));
     if (!charData)
     {
         log::error("Memory allocation failed for %ls", textureFile.c_str());
@@ -599,12 +679,12 @@ bool TextureCache::hackLoadJitterFromFile(
                 flt.f *= ratio;
                 return float_to_half_full(flt).u;
             };
-        for (int y = 0; y < imgHeight; y++)
+        for (int y = 0; y < std::min(imgHeight, Height1K); y++)
         {
-            for (int x = 0; x < imgWidth; x++)
+            for (int x = 0; x < std::min(imgWidth, Width1K); x++)
             {
                 idxSrc = y * imgWidth + x;
-                idxDst = (y * imgWidth + x) * 2;  // each mv stored as 2 fp16
+                idxDst = (y * Width1K + x) * 2;  // each mv stored as 2 fp16
 
                 // no interpolation needed
                 fp16Data[idxDst]     = scaleMV(r[idxSrc], -ratioX);  // mv.X
@@ -624,7 +704,7 @@ bool TextureCache::hackLoadJitterFromFile(
             {
 
                 idxSrc = y * imgWidth + x;
-                idxDst = y * imgWidth + x;  // each depth stored as a D24S8-encoded bits
+                idxDst = y * Width1K + x;  // each depth stored as a D24S8-encoded bits
 
                 // Key: convert FP16 to D24S8 format, where LS 8 bits are stencil set to 0
                 // Extract 24 depth bits

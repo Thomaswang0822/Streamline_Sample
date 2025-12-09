@@ -84,6 +84,11 @@ namespace donut::engine
             MOTION_VECTORS = 1,
             GBUFFER_DEPTH = 2,
         };
+        // For now, we only support 1K inputs (while allowing upscaled to 1K, 2K, or 4K).
+        static constexpr size_t Width1K = 1920;
+        static constexpr size_t Height1K = 1080;
+        static constexpr size_t PixelCount1K = Width1K * Height1K;
+
     protected:
         nvrhi::DeviceHandle m_Device;
         nvrhi::CommandListHandle m_CommandList;
