@@ -230,7 +230,7 @@ namespace donut::app
     {
     public:
         // we only need hack ON/OFF to decide whether to allow window resize
-        bool enableHack;
+        bool enableHack = false;
 
         static DeviceManager* Create(nvrhi::GraphicsAPI api);
 
@@ -383,7 +383,7 @@ namespace donut::app
             std::function<void(DeviceManager&, uint32_t)> beforePresent = nullptr;
             std::function<void(DeviceManager&, uint32_t)> afterPresent = nullptr;
         } m_callbacks;
-
+        
 #if DONUT_WITH_STREAMLINE
         static StreamlineInterface& GetStreamline();
 #endif

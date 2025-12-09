@@ -219,6 +219,8 @@ namespace
         inputs.Flags = m_desc.Flags;
         inputs.NumDescs = m_desc.NumDescs;
         inputs.DescsLayout = m_desc.DescsLayout;
+        if (inputs.DescsLayout != D3D12_ELEMENTS_LAYOUT_ARRAY_OF_POINTERS && inputs.DescsLayout != D3D12_ELEMENTS_LAYOUT_ARRAY)
+            inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY_OF_POINTERS;
         inputs.InstanceDescs = m_desc.InstanceDescs;
         static_assert(sizeof(BuildRaytracingAccelerationStructure::ppGeometryDescs) == sizeof(BuildRaytracingAccelerationStructure::InstanceDescs));
         static_assert(sizeof(D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS::ppGeometryDescs) == sizeof(D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS::InstanceDescs));

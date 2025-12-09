@@ -213,10 +213,13 @@ namespace donut::engine
         
         int TraverseFolderPath(
             const std::filesystem::path& folderPath,
-            std::vector<std::filesystem::path>& outPaths,
-            bool extractJitter,
+            std::vector<std::filesystem::path>& outPaths);
+
+        void LoadJitterFromFileLists(
+            const std::vector<std::filesystem::path>& FilePaths,
             std::vector<donut::math::float2>& jitterXY,
-            std::string extension);
+            const uint32_t FramesToReplayTotal,
+            const uint32_t FramesToCapture);
 
         // Tells if the texture has been loaded from file successfully and its data is available in the texture object.
         // After the texture is finalized and uploaded to the GPU, the data is no longer available on the CPU,
@@ -315,13 +318,27 @@ namespace donut::engine
         nvrhi::ITexture* texture,
         const char* fileName);
 
+    bool SaveMVDepthsToEXR(
+        bool isMV,
+        nvrhi::IDevice* device,
+        nvrhi::ITexture* texture,
+        const char* fileName);
+
     /**
-     * Attempt 5: Save screenshot to HDR instead.
-     * Unfortunately, Windows API like BitBlt() cannot capture HDR data.
-     * We need to use DX12 API.
+     * Attempt 5: Since BitBlt() we used in Attempt 4 cannot capture HDR data, we try to manually
+     * tone map the 8-bit LDR data and save to exr. Unfortunately, the result looks way off.
      */
-    [[deprecated("UNDER ACTIVE DEVELOPMENT - DO NOT USE")]]
-    bool SaveCaptureDataToEXR(const uint32_t* bgraData, const char* fileName, const uint32_t width, const uint32_t height);
+    [[deprecated("WRONG LOOKING IMAGE - DO NOT USE")]]
+    bool SaveTMedLDRToEXR(const uint32_t* bgraData, const char* fileName, const uint32_t width, const uint32_t height);
 
     bool TestTinyExrWrite();
+
+    /**
+     * Attempt 8 Helper: After we map the ID3D11Texture2D to staging texture (D3D11_MAPPED_SUBRESOURCE mapped),
+     * save it to exr file using tinyexr.
+     * 
+     * First 2 args should be mapped.pData and mapped.RowPitch
+     */
+    bool SaveStagingTextureDataToEXR(const void* pData, const uint32_t rowPitch, const int width, const int height, const std::string filename);
+
 }

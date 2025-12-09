@@ -96,7 +96,7 @@ public:
      * They don't store FG frame either.
      */
     [[deprecated("Cannot export FG frames, deprecated")]]
-    void DeviceManager_DX12::SaveDX12SwapChainBuffers(std::filesystem::path pngPath);
+    void SaveDX12SwapChainBuffers(std::filesystem::path pngPath);
     
 protected:
     bool CreateInstanceInternal() override;

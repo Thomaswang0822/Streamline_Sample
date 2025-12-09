@@ -766,7 +766,6 @@ bool DeviceManager_DX12::Present()
     //SaveDX12SwapChainBuffers(pngPath);
 
     HRESULT result = m_SwapChain->Present(m_DeviceParams.vsyncEnabled ? 1 : 0, presentFlags);
-    //HRESULT result = 0l;
 
     m_FrameFence->SetEventOnCompletion(m_FrameCount, m_FrameFenceEvents[bufferIndex]);
     m_GraphicsQueue->Signal(m_FrameFence, m_FrameCount);

@@ -590,8 +590,8 @@ bool TextureCache::hackLoadJitterFromFile(
     {
         uint16_t* fp16Data = reinterpret_cast<uint16_t*>(charData);
         // donut has mvec in pixel space
-        const float ratioX = static_cast<float>(imgWidth);
-        const float ratioY = static_cast<float>(imgHeight);
+        const float ratioX = static_cast<float>(imgWidth)  * 0.5f;
+        const float ratioY = static_cast<float>(imgHeight) * 0.5f;
         auto scaleMV = [](uint16_t value, float ratio) -> uint16_t
             {
                 tinyexr::FP16 half; half.u = value;
@@ -607,12 +607,16 @@ bool TextureCache::hackLoadJitterFromFile(
                 idxDst = (y * imgWidth + x) * 2;  // each mv stored as 2 fp16
 
                 // no interpolation needed
-                fp16Data[idxDst]     = scaleMV(r[idxSrc], ratioX);  // mv.X
-                fp16Data[idxDst + 1] = scaleMV(g[idxSrc], ratioY);  // mv.Y
+                fp16Data[idxDst]     = scaleMV(r[idxSrc], -ratioX);  // mv.X
+                fp16Data[idxDst + 1] = scaleMV(g[idxSrc], +ratioY);  // mv.Y
             }
         } // end iterating the image
     }
     else {
+        /// VERY IMPORTANT NOTE:
+        /// http://gamedev.net/forums/topic/632751-dxgi_format-codes-and-endianness/4989986/
+        /// "For any DXGI format, the byte order is the order of the components in the format name. 
+        /// So for R8G8B8A8, R should be the first (lowest) byte and A should be the last (highest) byte."
         uint32_t* u32Data = reinterpret_cast<uint32_t*>(charData);
         for (int y = 0; y < imgHeight; y++)
         {
@@ -630,7 +634,7 @@ bool TextureCache::hackLoadJitterFromFile(
                 // Convert float to 24-bit integer depth
                 const uint32_t u24MAX = (1 << 24) - 1;
                 uint32_t depth24 = static_cast<uint32_t>(depthValue * u24MAX);
-                u32Data[idxDst] = (depth24 << 8);
+                u32Data[idxDst] = depth24; // upper 8 bits automatically 0
             }
         } // end iterating the image
     }
@@ -1059,15 +1063,12 @@ std::shared_ptr<LoadedTexture> TextureCache::LoadTextureFromMemoryDeferred(
 
 int TextureCache::TraverseFolderPath(
     const std::filesystem::path& folderPath, 
-    std::vector<std::filesystem::path>& outPaths, 
-    bool extractJitter,
-    std::vector<float2>& jitterXY,
-    std::string extension)
+    std::vector<std::filesystem::path>& outPaths)
 {
     /// vfs::IFileSystem works relative to project root, i.e. "/media/whatever"
     /// while cwd is at _build/, i.e. "../media/whatever"
     std::filesystem::path ifsPath(folderPath.string().substr(2));
-    int count = m_fs->enumerateFiles(ifsPath, { extension },
+    int count = m_fs->enumerateFiles(ifsPath, { ".exr" },
         [&folderPath, &outPaths](std::string_view name)
         {
             // but still output correct relative path for tinyexr to use
@@ -1077,41 +1078,65 @@ int TextureCache::TraverseFolderPath(
     // Sort files to ensure proper frame order (assuming filenames contain frame numbers)
     std::sort(outPaths.begin(), outPaths.end());
 
-    // Then iterate the sorted list to keep the jitter order consistent
-    if (extractJitter)
-    {
-        // this func is also called when reading MV and Depths, so we clear conditionally.
-        jitterXY.clear();
-        for (const auto& entry : outPaths)
-        {
-            /// Example: NPP_beauty_2472_0000_0_-0.40563965_-0.35599041
-            /// NOTE: both XY are .8f with range in [-0.5, 0.5]
-            try
-            {
-                std::string pathStr = entry.stem().generic_string();
-
-                size_t lastDelim = pathStr.find_last_of('_');
-                size_t secondLastDelim = pathStr.find_last_of('_', lastDelim - 1);
-                if (lastDelim == std::string::npos || secondLastDelim == std::string::npos)
-                    donut::log::error("EXR jitter filename %ls does not have expected number of underscores.", pathStr);
-
-                // 2nd-last X, last Y
-                jitterXY.push_back(float2(
-                    std::stof(pathStr.substr(secondLastDelim + 1, lastDelim - secondLastDelim - 1)), 
-                    std::stof(pathStr.substr(lastDelim + 1)) 
-                ));
-            }
-            catch (const std::exception& e)
-            {
-                donut::log::error("%s", e.what());
-            }
-        }
-    }
-
-
     return outPaths.size();
 }
 
+void TextureCache::LoadJitterFromFileLists(
+    const std::vector<std::filesystem::path>& FilePaths, 
+    std::vector<donut::math::float2>& jitterXY,
+    const uint32_t FramesToReplayTotal,
+    const uint32_t FramesToCapture)
+{
+    // Then iterate the sorted list to keep the jitter order consistent
+    // this func is also called when reading MV and Depths, so we clear conditionally.
+    jitterXY.clear();
+    for (const auto& entry : FilePaths)
+    {
+        /// Example: NPP_beauty_2472_0000_0_-0.40563965_-0.35599041
+        /// NOTE: both XY are .8f with range in [-0.5, 0.5]
+        try
+        {
+            std::string pathStr = entry.stem().generic_string();
+
+            size_t lastDelim = pathStr.find_last_of('_');
+            size_t secondLastDelim = pathStr.find_last_of('_', lastDelim - 1);
+            if (lastDelim == std::string::npos || secondLastDelim == std::string::npos)
+                donut::log::error("EXR jitter filename %ls does not have expected number of underscores.", pathStr);
+
+            // 2nd-last X, last Y
+            jitterXY.push_back(float2(
+                std::stof(pathStr.substr(secondLastDelim + 1, lastDelim - secondLastDelim - 1)),
+                std::stof(pathStr.substr(lastDelim + 1))
+            ));
+        }
+        catch (const std::exception& e)
+        {
+            donut::log::error("%s", e.what());
+        }
+    }
+
+    const size_t nFiles = jitterXY.size();
+    /// But make sure we at least FramesToReplayTotal = 19 entries.
+    /// This will happen ONLY IF we have < 19 input files.
+    /// 
+    /// First make the middle part (frames to be captured) to
+    if (nFiles < FramesToReplayTotal)
+    {
+        size_t index = 0;
+        while (jitterXY.size() < FramesToCapture) {
+            jitterXY.push_back(jitterXY[index]);
+			index = (index + 1) % nFiles;
+        }
+        // then make 15 to 18
+        auto safetyJitter = jitterXY.back();
+        // preprend last 3 entries as warmup frames
+        jitterXY.insert(jitterXY.begin(), jitterXY.end() - 3, jitterXY.end());
+        // append first entries as safety frame
+        jitterXY.push_back(safetyJitter);
+	}
+	assert(jitterXY.size() >= FramesToReplayTotal);
+    return;
+}
 
 std::shared_ptr<TextureData> TextureCache::GetLoadedTexture(std::filesystem::path const& path)
 {
@@ -1483,9 +1508,139 @@ namespace donut::engine
         return success;
     }
 
-    bool SaveCaptureDataToEXR(const uint32_t* bgraData, const char* fileName, const uint32_t width, const uint32_t height)
+    bool SaveMVDepthsToEXR(bool isMV, nvrhi::IDevice* device, nvrhi::ITexture* texture, const char* fileName)
     {
-        assert(false, "SaveCaptureDataToEXR() is not ready for use");
+        const auto& desc = texture->getDesc();
+
+        // Create command list and staging texture
+        nvrhi::CommandListHandle commandList = device->createCommandList();
+        commandList->open();
+
+        nvrhi::StagingTextureHandle stagingTexture = device->createStagingTexture(desc, nvrhi::CpuAccessMode::Read);
+        commandList->copyTexture(stagingTexture, nvrhi::TextureSlice(), texture, nvrhi::TextureSlice());
+
+        commandList->close();
+        device->executeCommandList(commandList);
+
+        // Map staging texture - get raw data pointer
+        size_t rowPitchBytes = 0;
+        const void* rawData = device->mapStagingTexture(
+            stagingTexture, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitchBytes);
+
+        if (!rawData)
+            return false;
+
+        const uint16_t* u16Data = reinterpret_cast<const uint16_t*>(rawData);
+		const uint32_t* u32Data = reinterpret_cast<const uint32_t*>(rawData);
+
+        const uint32_t width = desc.width;
+        const uint32_t height = desc.height;
+        const int channels = isMV ? 2 : 1; // MV x and y
+		const size_t bytesPerPixel = channels * isMV ? 2 : 4; // RG16_FLOAT : D24S8
+        const size_t expectedRowPitch = width * bytesPerPixel;
+        //assert(rowPitchBytes == expectedRowPitch, "Expect rowPitchBytes to be %d, got %d", expectedRowPitch, rowPitchBytes);
+
+        // Prepare EXR structures
+        EXRHeader header;
+        InitEXRHeader(&header);
+        EXRImage exrImage;
+        InitEXRImage(&exrImage);
+
+        // Configure EXR header
+        header.num_channels = channels;
+        header.channels = new EXRChannelInfo[header.num_channels];
+        header.pixel_types = new int[header.num_channels];
+        header.requested_pixel_types = new int[header.num_channels];
+
+        /// The texture stores data in RGBA order, but TEV open it as ABGR (alphetical order).
+        const char channel_names[2] = {'X', 'Y'};
+        for (int i = 0; i < header.num_channels; i++) {
+            //strncpy(header.channels[i].name, channel_names[i], 255);
+            header.channels[i].name[0] = channel_names[i];
+            header.channels[i].name[1] = '\0';
+            header.pixel_types[i] = TINYEXR_PIXELTYPE_HALF;
+            header.requested_pixel_types[i] = TINYEXR_PIXELTYPE_HALF;
+        }
+
+        header.compression_type = TINYEXR_COMPRESSIONTYPE_NONE;
+
+        // Configure EXR image
+        exrImage.num_channels = header.num_channels;
+        exrImage.width = width;
+        exrImage.height = height;
+
+        // Allocate planar arrays for RGBA channels
+        std::vector<std::vector<uint16_t>> channelData(header.num_channels);
+        for (auto& channel : channelData) {
+            channel.resize(width * height);
+        }
+
+        // Calculate row pitch in terms of uint16_t elements
+        const size_t rowPitchElements = rowPitchBytes / (isMV ? sizeof(uint16_t) : sizeof(uint32_t));;
+
+        constexpr uint32_t FP24MAX = 0x00FFFFFF;
+        auto float_to_half = [](float value) -> uint16_t {
+            tinyexr::FP32 f32;
+			f32.f = value;
+			return tinyexr::float_to_half_full(f32).u;
+        };
+
+        // Deinterleave pixel data into planar format
+        for (uint32_t y = 0; y < height; y++) {
+            if (isMV) {
+                const uint16_t* srcRow = u16Data + y * rowPitchElements;
+
+                for (uint32_t x = 0; x < width; x++) {
+                    const size_t dstIdx = y * width + x;
+                    const size_t srcIdx = x * channels; // 2 channels per pixel
+
+                    channelData[0][dstIdx] = srcRow[srcIdx + 0]; // X
+                    channelData[1][dstIdx] = srcRow[srcIdx + 1]; // Y
+                }
+            }
+            else {
+                // Depth texture is D24S8 format
+                const uint32_t* srcRow = u32Data + y * rowPitchElements;
+
+                for (uint32_t x = 0; x < width; x++) {
+                    uint32_t pixel = srcRow[x];
+                    // Extract depth from D24S8 (depth in lower bits)
+                    uint32_t depth24 = pixel & FP24MAX;
+                    float depthValue = static_cast<float>(depth24) / static_cast<float>(FP24MAX);
+                    // Convert to FP16
+                    uint16_t halfDepth = float_to_half(depthValue);
+
+                    size_t dstIdx = y * width + x;
+                    channelData[0][dstIdx] = halfDepth;
+                }
+            }
+        }
+
+        // Prepare channel pointers for EXR
+        std::vector<unsigned char*> imagePtrs(header.num_channels);
+        for (int i = 0; i < header.num_channels; i++) {
+            imagePtrs[i] = reinterpret_cast<unsigned char*>(channelData[i].data());
+        }
+        exrImage.images = imagePtrs.data();
+
+        // Save EXR file
+        const char* err = nullptr;
+        int ret = SaveEXRImageToFile(&exrImage, &header, fileName, &err);
+        bool success = (ret == TINYEXR_SUCCESS);
+
+        // Cleanup
+        delete[] header.channels;
+        delete[] header.pixel_types;
+        delete[] header.requested_pixel_types;
+
+        device->unmapStagingTexture(stagingTexture);
+
+        return success;
+    }
+
+    bool SaveTMedLDRToEXR(const uint32_t* bgraData, const char* fileName, const uint32_t width, const uint32_t height)
+    {
+        assert(false, "SaveTMedLDRToEXR() generates wrong-looking output and thus shouldn't be used.");
 
         constexpr int channels = 3; // RGB
         EXRHeader header;
@@ -1642,6 +1797,91 @@ namespace donut::engine
         delete[] image.images;
 
         printf("EXR file 'test.exr' created successfully.\n");
+        return true;
+    }
+
+    bool SaveStagingTextureDataToEXR(
+        const void* pData,
+        const uint32_t rowPitch,
+        const int width,
+        const int height,
+        const std::string filename)
+    {
+        const uint16_t* u16Data = reinterpret_cast<const uint16_t*>(pData);
+
+        EXRHeader header;
+        InitEXRHeader(&header);
+        EXRImage exrImage;
+        InitEXRImage(&exrImage);
+
+        // Configure EXR header
+        header.num_channels = 4;
+        header.channels = new EXRChannelInfo[header.num_channels];
+        header.pixel_types = new int[header.num_channels];
+        header.requested_pixel_types = new int[header.num_channels];
+
+        /// The texture stores data in RGBA order, but TEV open it as ABGR (alphetical order).
+        //const char channel_names[4] = { 'R', 'G', 'B', 'A' };
+        const char channel_names[4] = { 'A', 'B', 'G', 'R' };
+        for (int i = 0; i < header.num_channels; i++) {
+            //strncpy(header.channels[i].name, channel_names[i], 255);
+            header.channels[i].name[0] = channel_names[i];
+            header.channels[i].name[1] = '\0';
+            header.pixel_types[i] = TINYEXR_PIXELTYPE_HALF;
+            header.requested_pixel_types[i] = TINYEXR_PIXELTYPE_HALF;
+        }
+
+        header.compression_type = TINYEXR_COMPRESSIONTYPE_NONE;
+
+        // Configure EXR image
+        exrImage.num_channels = header.num_channels;
+        exrImage.width = width;
+        exrImage.height = height;
+
+        // Allocate planar arrays for RGBA channels
+        std::vector<std::vector<uint16_t>> channelData(header.num_channels);
+        for (auto& channel : channelData) {
+            channel.resize(width * height);
+        }
+
+        // Calculate row pitch in terms of uint16_t elements
+        const size_t rowPitchElements = rowPitch / sizeof(uint16_t);
+
+        // Deinterleave pixel data into planar format
+        for (uint32_t y = 0; y < height; y++) {
+            const uint16_t* srcRow = reinterpret_cast<const uint16_t*>(
+                static_cast<const uint8_t*>(pData) + y * rowPitch);
+
+            for (uint32_t x = 0; x < width; x++) {
+                const size_t dstIdx = y * width + x;
+                const size_t srcIdx = x * 4; // 4 channels per pixel
+
+                // Reverse the channel order to match EXR expectations
+                channelData[0][dstIdx] = srcRow[srcIdx + 3]; // A into R
+                channelData[1][dstIdx] = srcRow[srcIdx + 2]; // B into G
+                channelData[2][dstIdx] = srcRow[srcIdx + 1]; // G into B
+                channelData[3][dstIdx] = srcRow[srcIdx + 0]; // R into A
+            }
+
+        }
+
+        // Prepare channel pointers for EXR
+        std::vector<unsigned char*> imagePtrs(header.num_channels);
+        for (int i = 0; i < header.num_channels; i++) {
+            imagePtrs[i] = reinterpret_cast<unsigned char*>(channelData[i].data());
+        }
+        exrImage.images = imagePtrs.data();
+
+        // Save EXR file
+        const char* err = nullptr;
+        int ret = SaveEXRImageToFile(&exrImage, &header, filename.c_str(), &err);
+        bool success = (ret == TINYEXR_SUCCESS);
+
+        // Cleanup
+        delete[] header.channels;
+        delete[] header.pixel_types;
+        delete[] header.requested_pixel_types;
+        
         return true;
     }
 

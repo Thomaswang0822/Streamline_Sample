@@ -238,9 +238,9 @@ int main(int __argc, const char* const* __argv)
     deviceParams.swapChainSampleCount = 1;
     deviceParams.swapChainBufferCount = 3;
     deviceParams.startFullscreen = false;
-    deviceParams.vsyncEnabled = false;
-    //deviceParams.swapChainFormat = nvrhi::Format::BGRA8_UNORM;
-    deviceParams.swapChainFormat = nvrhi::Format::RGBA16_FLOAT;
+    deviceParams.vsyncEnabled = true;
+    deviceParams.swapChainFormat = nvrhi::Format::BGRA8_UNORM;
+
 #ifndef NDEBUG
     if (api != nvrhi::GraphicsAPI::VULKAN)
     {
@@ -261,11 +261,18 @@ int main(int __argc, const char* const* __argv)
 
     auto scripting = ScriptingConfig(__argc, __argv);
     auto hackOptions = StreamlineSample::parseHackOptions(__argc, __argv);
+    // manual change for DEBUG
+    //hackOptions.enableHack = false;
+    //hackOptions.storeOutput = false;
+    //hackOptions.identifier = "WITH_DEPTH";
+    
     if (hackOptions.enableHack) {
         deviceParams.backBufferWidth = 3840;
         deviceParams.backBufferHeight = 2160;
         // disable fullscreen when debugging
         deviceParams.startFullscreen = true;
+        /// RGBA16_FLOAT will "disable" DLSSG, and R11G11B10_FLOAT cannot be handled by dx12.
+        deviceParams.swapChainFormat = nvrhi::Format::R10G10B10A2_UNORM;
     }
 
 #ifdef _DEBUG
@@ -302,7 +309,7 @@ int main(int __argc, const char* const* __argv)
 #endif
     // copy necessary hack options to deviceManager
     deviceManager->enableHack = hackOptions.enableHack;
-	//deviceManager->FramesToReplay = hackOptions.FramesToReplay;
+	//deviceManager->FramesToWarmup = hackOptions.FramesToWarmup;
 
     if (!deviceManager->CreateWindowDeviceAndSwapChain(deviceParams, windowTitle.c_str()))
     {
@@ -337,6 +344,12 @@ int main(int __argc, const char* const* __argv)
 
         uiData.EnableVsync = deviceParams.vsyncEnabled;
         uiData.Resolution = donut::math::int2{ (int)deviceParams.backBufferWidth, (int)deviceParams.backBufferHeight };
+        if (hackOptions.enableHack) {
+            //uiData.VisualiseBuffers = true;
+            uiData.EnableUI = false;
+            // must turn on Relex for DLSS-FG
+            uiData.REFLEX_Mode = static_cast<int>(sl::ReflexMode::eLowLatency);
+        }
 
         std::shared_ptr<MultiViewportApp> pApp = std::make_shared<MultiViewportApp>(deviceManager, uiData, sceneName, scripting);
         std::shared_ptr<UIRenderer> gui = std::make_shared<UIRenderer>(deviceManager, pApp->getASample(), uiData);
@@ -346,9 +359,10 @@ int main(int __argc, const char* const* __argv)
         assert(pApp->getViewportCount() > 0, "No valid viewport");
         auto slSample = pApp->getASample();
         slSample->hackOptions = hackOptions;
-        // load data before the main loop
+        // hide cursor and load data before the main loop
         if (hackOptions.enableHack) {
-            slSample->turnOffUI();
+            glfwSetInputMode(deviceManager->GetWindow(), GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
+
             auto texCache = slSample->GetTextureCache();
             assert(slSample->LoadHackTextures(texCache), "load hack texture data failed");
         }

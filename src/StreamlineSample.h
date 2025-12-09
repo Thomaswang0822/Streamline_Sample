@@ -39,6 +39,7 @@
 #include "UIData.h"
 #include <random>
 #include <chrono>
+#include <unordered_map>
 
 // From Donut
 #include <donut/core/vfs/VFS.h>
@@ -65,6 +66,9 @@
 #include <donut/app/Camera.h>
 #include <donut/app/DeviceManager.h>
 #include <nvrhi/utils.h>
+
+#include <winrt/windows.media.capture.h>
+#include <winrt/Windows.Graphics.Capture.h>
 
 using namespace donut::math;
 using namespace donut::app;
@@ -248,6 +252,45 @@ private:
     sl::DLSSMode                                    DLSSRR_Last_Mode = sl::DLSSMode::eOff;
     donut::math::int2                               m_DLSSRR_Last_DisplaySize = { 0,0 };
 
+    // see Attempt 6
+#pragma region MediaCapture 
+    winrt::Windows::Media::Capture::MediaCapture m_mediaCapture{ nullptr };
+    winrt::Windows::Media::Capture::AdvancedPhotoCapture m_advancedCapture{ nullptr };
+    bool m_hdrSupported = false;
+
+    winrt::Windows::Foundation::IAsyncAction CleanupMediaCaptureAsync();
+#pragma endregion
+
+    // see Attempt 8
+#pragma region FramePoolCapture
+    winrt::Windows::Graphics::Capture::GraphicsCaptureItem m_captureItem{ nullptr };
+    winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice m_captureDevice{ nullptr };
+    bool m_captureInitialized = false;
+
+    bool CreateCaptureDevice();
+    bool CreateCaptureItemForWindow();
+    /**
+     * @brief Calls CreateCaptureDevice() and CreateCaptureItemForWindow()
+     * @return success or not
+     */
+    bool InitializeFramePoolCapture();
+    void CleanupFramePoolCapture();
+    
+    /**
+     * @brief Helper of Attempt 8 CaptureFramePoolHDR(). 
+     * Should be called in a while(true) loop, i.e. repeat until unique. It does 2 things:
+     * 
+     * 1) map the given ID3D11Texture2D to a staging texture(D3D11_MAPPED_SUBRESOURCE).
+     * 2) IF frame is unique (by checking image hash), call SaveStagingTextureDataToEXR()
+     * in TextureCache.h to save exr file using tinyexr.
+     * @return True if texture is a unique new one and saved to exr file successfully. False if duplicate.
+     */
+    bool SaveIfUniqueTexture(
+        winrt::com_ptr<ID3D11Device> device,
+        winrt::com_ptr<ID3D11Texture2D> texture,
+        const std::string filename);
+#pragma endregion
+
 public:
 
 #pragma region Hack
@@ -263,48 +306,107 @@ public:
             RR_4K = 4
         } renderResolution = HackRenderResolution::RR_1K;
         bool parseJitter = false;
-        std::vector<std::filesystem::path>  hackPaths = {};
+        std::vector<std::filesystem::path> hackPaths = {};
         bool storeOutput = false;
-        size_t outputMaxCount = 0;
+        size_t batchIndex = 0;
         std::filesystem::path outPath = "";
 
-        // internal, should not be set directly. Set by counting exr files in hackPaths
+        // INTERNAL, should not be set directly. Set by counting exr files in hackPaths
         size_t frameCount = 0;
-        // internal, each Present Callback should take 2 * StoreDelay seconds, and Present() will evenly 
-        // space the display time of rendered frame and FG frame to StoreDelay
-        const static int64_t StoreDelayMS = 3500;
-        /// internal, used for DLSS-G cold start problem
-        /// @see StreamlineSample() constructor where we set afterPresent callback to see how it works
-        const static uint32_t FramesToReplay = 3;
+        size_t totalBatches = 0;
     } hackOptions;
+    // constexpr variables for hack
+    constexpr static uint64_t CaptureTimeoutMS = 100;
+    /**
+     * @brief INTERNAL, for sleep bubble trick.
+     * Each Present Callback should take 2 * StoreDelay seconds, and Present() will evenly
+     * space the display time of rendered frame and FG frame to StoreDelay
+     *
+     * UPDATE: Previously we have this StoreDelayMS bubble (each rendered frame or FG frame) displays
+     * for StoreDelayMS ms to give us enough time to **accurately** capture frame and avoid duplicates.
+     * Now with image hash to check duplication, we repeat capture until getting a **precisely** new frame.
+     */
+    [[deprecated("Sleep bubble trick should NOT be used when having image hash")]]
+    constexpr static int64_t StoreDelayMS = 2000;
+    /**
+ * @brief INTERNAL, timeout before trying another capture and see if it's a new frame.
+ *
+ * NOTE: dlfg.cpp (closed source) has a 100ms timeout before reset frame timer,
+ * thus DuplicateTimeout * DuplicateMaxRetry cannot exceed 100ms, otherwise the app freezes.
+ */
+    constexpr static std::chrono::milliseconds DuplicateTimeout{ 50 };
+    constexpr static uint32_t DuplicateMaxRetry = 5;
+    /**
+     * @brief INTERNAL, used for DLSS-G cold start problem.
+     * See StreamlineSample() constructor where we set Present callback to see how it works
+     */
+    constexpr static uint32_t FramesToWarmup = 3;
+    constexpr static uint32_t FramesToCapture = 15;
+    /// plus one more safety frame in the end to ensure last captured frame is correctly computed.
+    constexpr static uint32_t FramesToReplayTotal = 19;
+
     // read-only data storage to copy from; copy dst are RTs defined in RenderTargets.h and GBuffer.h
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedColorsHDR;
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedMVs;
     std::vector<std::shared_ptr<donut::engine::TextureData>> hackLoadedDepths;
     std::vector<donut::math::float2> hackLoadedJitterOffsets;
 
+    struct FrameData {
+        std::vector<uint8_t> data;
+        const uint32_t rowPitch;
+        const int width;
+        const int height;
+        const std::string filename;
+    };
+
+    /**
+     * @brief Stores image by xxhash XXH64(). Used for duplication detection after capture before export.
+     */
+    std::unordered_map<uint64_t, FrameData> hash_bin;
+
     bool LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache);
 
     /**
+     * @brief Parse from Cmdline
      * Will be called in App scope BEFORE any StreamlineSample instance is created.
      * That global option will be manually copied to the instance right before 
      * calling LoadHackTextures() above.
      */
     static HackOptionDef parseHackOptions(int argc, const char* const* argv);
 
-    inline void turnOffUI() { 
-        m_ui.EnableUI = false; 
-        m_ui.REFLEX_Mode = static_cast<int>(sl::ReflexMode::eLowLatency);
-    }
-
     /**
-     * Attempt 4: Save screenshot from frontend by passing the GLFW window to Windows API.
+     * @brief Attempt 4 (SUCCESS): Save screenshot from frontend by passing the GLFW window to Windows API.
      * Finally we find a way to save FG frames.
      * 
      * \param hWnd A Windows handle of the GLFW window get by glfwGetWin32Window() a GLFWwindow*
 	 * \param StoreDelayMS Need a delay to ensure successful capture of presented frame. See HackOptionDef::StoreDelayMS.
      */
-    void CaptureScreenshotSync(HWND hWnd, std::string filename, const int64_t StoreDelayMS);
+    void CaptureBitBlitLDR(HWND hWnd, std::string filename);
+
+    /**
+     * @brief Attempt 6: Save screenshot with winrt AdvancedPhotoCapture class?
+     * No, I spent 2 days making it work, and finally realized it's media capture 
+     * (i.e. taking a photo of you using the camera) instead of screen capture.
+     */
+    [[deprecated("NOT screen capture, deprecated")]]
+    winrt::Windows::Foundation::IAsyncAction CaptureMediaAsync(std::string filename);
+
+    /**
+     * @brief Attempt 7: Save screenshot with winrt Windows.Media.AppRecording
+     * Unfortunately, capture is not supported in our Win32 app. It's primarily for UWP apps.
+     */
+    [[deprecated("NOT supported, deprecated")]]
+    winrt::Windows::Foundation::IAsyncAction CaptureAppRecordingAsync(std::string filename);
+
+    /**
+     * @brief Attempt 8 (SUCCESS): Capture with winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool
+     * Unlike attempt 4 (success) that uses BitBlit() which captures the LDR screen,
+     * here we get a Direct3D11CaptureFrame that supports RGBA16_FLOAT HDR format.
+     *  
+     * We install Windows Implementation Library (wil) and use wil::shared_event to handle FrameArrived()
+     */
+    void CaptureFramePoolHDR(const std::string filename);
+
 #pragma endregion
 
 public:

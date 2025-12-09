@@ -89,7 +89,7 @@ public:
     donut::render::SsaoParameters       SsaoParams;
 
     // Tonemapping
-    bool                                 EnableToneMapping = false;
+    bool                                 EnableToneMapping = true;
     donut::render::ToneMappingParameters ToneMappingParams;
 
     // Sky
@@ -122,7 +122,7 @@ public:
     float                               DLSSRR_Sharpness = 0.f;
     sl::DLSSDPreset                     DLSSRR_presets[static_cast<int>(sl::DLSSMode::eCount)] = {};
     sl::DLSSDPreset                     DLSSRR_last_presets[static_cast<int>(sl::DLSSMode::eCount)] = {};
-    bool UIData::DLSSRRPresetsChanged()
+    bool DLSSRRPresetsChanged()
     {
         for (int i = 0; i < static_cast<int>(sl::DLSSMode::eCount); i++)
         {
@@ -131,7 +131,7 @@ public:
         }
         return false;
     };
-    bool UIData::DLSSRRPresetsAnyNonDefault()
+    bool DLSSRRPresetsAnyNonDefault()
     {
         for (int i = 0; i < static_cast<int>(sl::DLSSMode::eCount); i++)
         {
@@ -140,12 +140,12 @@ public:
         }
         return false;
     };
-    void UIData::DLSSRRPresetsUpdate()
+    void DLSSRRPresetsUpdate()
     {
         for (int i = 0; i < static_cast<int>(sl::DLSSMode::eCount); i++)
             DLSSRR_last_presets[i] = DLSSRR_presets[i];
     };
-    void UIData::DLSSRRPresetsReset()
+    void DLSSRRPresetsReset()
     {
         for (int i = 0; i < static_cast<int>(sl::DLSSMode::eCount); i++)
             DLSSRR_last_presets[i] = DLSSRR_presets[i] = sl::DLSSDPreset::eDefault;
