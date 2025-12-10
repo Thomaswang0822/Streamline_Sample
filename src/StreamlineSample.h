@@ -294,17 +294,47 @@ private:
 public:
 
 #pragma region Hack
+    /**
+     * Our own enum class with values equal to internal sl::DLSSMode.
+     * NOTE: it's a subset of sl::DLSSMode since we don't have 
+     * eOff, eCount, and eUltraQuality (This app disables using it, see UIRenderer.h)
+     */
+    enum class HackDLSSMode : uint32_t
+    {
+        DLAA = sl::DLSSMode::eDLAA,                            // 1.0x
+        MaxQuality = sl::DLSSMode::eMaxQuality,                // 1.5x
+        Balanced = sl::DLSSMode::eBalanced,                    // Around 1.724x, no idea why
+        MaxPerformance = sl::DLSSMode::eMaxPerformance,        // 2.0x
+        UltraPerformance = sl::DLSSMode::eUltraPerformance,    // 3.0x
+    };
+
+    /**
+     * Unlike FSR, DLSS uses display resolution + chosen DLSS (scale) mode to determine render resolution. 
+     * We want to fix render resolution to 1K and thus reverse-engineered these values.
+     * 
+     * { key, value }: { HackDLSSMode, Display Resolution (also backbuffer size) }
+     */
+	static inline const std::unordered_map<HackDLSSMode, std::pair<uint32_t, uint32_t>> DisplayResolutionPresets = {
+
+		{ HackDLSSMode::DLAA,               std::pair{1920u, 1080u} },
+		{ HackDLSSMode::MaxQuality,         std::pair{2880u, 1620u} },
+		{ HackDLSSMode::Balanced,           std::pair{3310u, 1862u} },
+		{ HackDLSSMode::MaxPerformance,     std::pair{3840u, 2160u} },
+		{ HackDLSSMode::UltraPerformance,   std::pair{5760u, 3240u} },
+	};
+
     // general runtime options
     struct HackOptionDef
     {
         bool enableHack = false;
         std::string identifier = "";
-        enum class HackRenderResolution
+        enum class HackDisplayResolution
         {
-            RR_1K = 1,
-            RR_2K = 2,
-            RR_4K = 4
-        } renderResolution = HackRenderResolution::RR_1K;
+            Res1K = 1,
+            Res2K = 2,
+            Res4K = 4
+        } displayResolution = HackDisplayResolution::Res1K;
+        HackDLSSMode upscaleMode = HackDLSSMode::DLAA;
         bool parseJitter = false;
         std::vector<std::filesystem::path> hackPaths = {};
         bool storeOutput = false;
@@ -314,6 +344,18 @@ public:
         // INTERNAL, should not be set directly. Set by counting exr files in hackPaths
         size_t frameCount = 0;
         size_t totalBatches = 0;
+
+        inline void SetBackBufferDimension(uint32_t& bbWidth, uint32_t& bbHeight) const {
+            if (!DisplayResolutionPresets.contains(upscaleMode))
+                donut::log::error("Wrong DLSS Upscale mode");
+
+            bbWidth  = DisplayResolutionPresets.at(upscaleMode).first;
+            bbHeight = DisplayResolutionPresets.at(upscaleMode).second;
+        }
+
+        inline sl::DLSSMode SetDLSSMode() const {
+            return static_cast<sl::DLSSMode>(upscaleMode);
+        }
     } hackOptions;
     // constexpr variables for hack
     constexpr static uint64_t CaptureTimeoutMS = 100;

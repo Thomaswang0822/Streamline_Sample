@@ -46,7 +46,7 @@ It works almost the same. Below is copied from FSR Offline Runner README.
 
 - EnableHack: a global switch, default false. If false, the app will run in its original behavior, rendering Sponza Palace.
 - Identifier: a string that helps you identify this run, default "UNDEFINED". Usually set to scene name.
-- RenderResolution: a int that controls the render resolution in K, default 1. Only accepted values are 1, 2, and 4.
+- DisplayResolution: a int that controls the display resolution in K, default 1. Only accepted values are 1, 2, and 4. For now we fix render resolution to 1K.
 - ParseJitter: whether to parse and use the jitter data from input filenames, default false. Currently we only have it in 1K inputs, so it will be forced to false it render resolution is not 1K.
 - HackPaths: **a single folder relative path** to the input frame capture folder, default *"../media/TEST_SCENE/NPP_JI"*. The path to the encoded MVs and Depths will be constructed automatically by replacing "NPP_JI" to "MVD_JI".
 - StoreOutput: whether to store output (screenshots), default false.
@@ -58,7 +58,7 @@ It works almost the same. Below is copied from FSR Offline Runner README.
 
 ./StreamlineSample.exe  -EnableHack \
                         -Identifier "Cmdline_TEST" \
-                        -RenderResolution 1 \
+                        -DisplayResolution 4 \
                         -ParseJitter \
                         -HackPaths "../media/TEST_SCENE/NPP_JI" \
                         -StoreOutput \
@@ -69,7 +69,7 @@ It works almost the same. Below is copied from FSR Offline Runner README.
 Also, it would be very convenient to set them up in the VS Debugger such that each test run is a one-click. Put this single-line arg list to StreamlineSample  Property Pages, in Configuration Properties -> Debugging -> Commandline Arguments. Adjust if needed. Make sure the `OutputPath` (e.g. `media/TEST_SCENE/screenshots`) exists.
 
 ```shell
--EnableHack -Identifier FG_TEST -RenderResolution 1 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -BatchIndex 2 -OutputPath "../media/TEST_SCENE/screenshots"
+-EnableHack -Identifier FG_TEST -DisplayResolution 4 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -BatchIndex 2 -OutputPath "../media/TEST_SCENE/screenshots"
 ```
 
 ## Tips

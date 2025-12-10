@@ -93,7 +93,7 @@ using namespace Microsoft::WRL;
 
 
 /// typical usage:
-/// -EnableHack -Identifier FG_TEST -RenderResolution 1 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -BatchIndex 1 -OutputPath "../media/TEST_SCENE/screenshots"
+/// -EnableHack -Identifier FG_TEST -DisplayResolution 4 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -BatchIndex 1 -OutputPath "../media/TEST_SCENE/screenshots"
 StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, const char* const* argv)
 {
     HackOptionDef options;
@@ -128,15 +128,15 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
             currentArg++;
             continue;
         }
-        if (hackMode && command == "-RenderResolution")
+        if (hackMode && command == "-DisplayResolution")
         {
             // We require at least 1 argument
             assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
-                "-RenderResolution requires a input to be provided (usage: -RenderResolution <1 or 2 or 4>");
+                "-DisplayResolution requires a input to be provided (usage: -DisplayResolution <1 or 2 or 4>");
             int resOption = std::stoi(argList[currentArg + 1]);
             assert(resOption == 1 || resOption == 2 || resOption == 4,
-                L"usage: -RenderResolution <1 or 2 or 4>, got %d", resOption);
-            options.renderResolution = static_cast<HackOptionDef::HackRenderResolution>(resOption);
+                L"usage: -DisplayResolution <1 or 2 or 4>, got %d", resOption);
+            options.displayResolution = static_cast<HackOptionDef::HackDisplayResolution>(resOption);
 
             currentArg++;
             continue;

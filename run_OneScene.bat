@@ -38,7 +38,7 @@ echo Identifier: %Identifier%
 echo Input path: %INPUT_ROOT%
 echo Output path: %OUTPUT_ROOT%
 echo INPUT_COUNT: %INPUT_COUNT%, BATCH_COUNT: %BATCH_COUNT%
-echo Command to run: %EXE_PATH% -EnableHack -Identifier %Identifier% -RenderResolution 1 -ParseJitter -HackPaths "%INPUT_ROOT%" -StoreOutput -BatchIndex i -OutputPath "%OUTPUT_ROOT%"
+echo Command to run: %EXE_PATH% -EnableHack -Identifier %Identifier% -DisplayResolution 4 -ParseJitter -HackPaths "%INPUT_ROOT%" -StoreOutput -BatchIndex i -OutputPath "%OUTPUT_ROOT%"
 echo Please confirm command to run and total batch number (BATCH_COUNT * 15 >= total input frames)
 
 choice /c YN /m "Run with these parameters? Double check OUTPUT_ROOT=%OUTPUT_ROOT% is what you normally pass to last arg -OutputPath."
@@ -55,7 +55,7 @@ for /L %%i in (0, 1, %END_INDEX%) do (
     echo ===== Batch Index %%i =====
     
     rem Execute the program
-    %EXE_PATH% -EnableHack -Identifier %Identifier% -RenderResolution 1 -ParseJitter -HackPaths "%INPUT_ROOT%" -StoreOutput -BatchIndex %%i -OutputPath "%OUTPUT_ROOT%"
+    %EXE_PATH% -EnableHack -Identifier %Identifier% -DisplayResolution 4 -ParseJitter -HackPaths "%INPUT_ROOT%" -StoreOutput -BatchIndex %%i -OutputPath "%OUTPUT_ROOT%"
 )
 
 rem Confirm total numbers first
