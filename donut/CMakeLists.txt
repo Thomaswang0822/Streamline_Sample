@@ -56,6 +56,7 @@ option(DONUT_WITH_TASKFLOW "Include TaskFlow" ON)
 option(DONUT_WITH_TINYEXR "Include TinyEXR" ON)
 option(DONUT_WITH_WIL "Include Windows.ImplementationLibrary" ON)
 option(DONUT_WITH_UNIT_TESTS "Donut unit-tests (see CMake/CTest documentation)" OFF)
+option(DONUT_WITH_MAGIC_ENUM "Include Magic Enum" ON)
 
 option(DONUT_WITH_STREAMLINE "Enable streamline, separate package required" OFF)
 set(DONUT_STREAMLINE_FETCH_URL "" CACHE STRING "Url to streamline git repo to fetch")

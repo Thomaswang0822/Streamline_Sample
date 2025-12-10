@@ -57,6 +57,12 @@ if (DONUT_WITH_TINYEXR AND NOT TARGET tinyexr)
     target_include_directories(tinyexr INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/tinyexr)
 endif()
 
+if (DONUT_WITH_MAGIC_ENUM AND NOT TARGET magic_enum)
+    add_library(magic_enum INTERFACE)
+    target_include_directories(magic_enum INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/magic_enum/include)
+endif()
+
+
 if (DONUT_WITH_TASKFLOW AND NOT TARGET taskflow)
     add_library(taskflow INTERFACE)
     target_include_directories(taskflow INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/taskflow)

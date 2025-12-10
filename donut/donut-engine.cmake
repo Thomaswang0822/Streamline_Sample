@@ -62,6 +62,11 @@ if (DONUT_WITH_TINYEXR)
     target_compile_definitions(donut_engine PUBLIC DONUT_WITH_TINYEXR)
 endif()
 
+if (DONUT_WITH_MAGIC_ENUM)
+    target_link_libraries(donut_engine magic_enum)
+    target_compile_definitions(donut_engine PUBLIC DONUT_WITH_MAGIC_ENUM)
+endif()
+
 set_target_properties(donut_engine PROPERTIES FOLDER Donut)
 
 target_compile_definitions(donut_engine PUBLIC DONUT_WITH_DX11=$<BOOL:${DONUT_WITH_DX11}>)

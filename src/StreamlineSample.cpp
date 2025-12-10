@@ -68,9 +68,8 @@
 
 #include <wrl.h> // ComPtr<ID3D11Device> impl
 
-#ifdef DONUT_WITH_WIL
 #include <wil/resource.h> // wil::shared_event
-#endif
+#include <magic_enum/magic_enum.hpp>
 
 #include <xxhash.h>
 
@@ -205,7 +204,8 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
         }
     }
 
-    assert(options.frameCount > 0, "hackOptions.frameCount is not set because -HackPaths <PATH> is missing or has wrong format.");
+    if (hackMode)
+        assert(options.frameCount > 0, "hackOptions.frameCount is not set because -HackPaths <PATH> is missing or has wrong format.");
     options.batchIndex = std::min(options.batchIndex, options.totalBatches - 1); // cap batchIndex
 
     return options;
