@@ -35,6 +35,7 @@
 #include "StreamlineSample.h"
 #include <sstream>
 #include <thread>
+#include <format>
 #include <future>
 #include <stb_image_write.h>
 
@@ -69,7 +70,7 @@
 #include <wrl.h> // ComPtr<ID3D11Device> impl
 
 #include <wil/resource.h> // wil::shared_event
-#include <magic_enum/magic_enum.hpp>
+#include <magic_enum/magic_enum_all.hpp>
 
 #include <xxhash.h>
 
@@ -94,9 +95,23 @@ using namespace Microsoft::WRL;
 
 
 /// typical usage:
-/// -EnableHack -Identifier FG_TEST -DisplayResolution 4 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -BatchIndex 1 -OutputPath "../media/TEST_SCENE/screenshots"
+/// -EnableHack -Identifier FG_TEST -DLSSMode "Balanced" -Upscale 4 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -BatchIndex 1 -OutputPath "../media/TEST_SCENE/screenshots"
+/// NOTE: -Upscale has higher priority than -DLSSMode.
 StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, const char* const* argv)
 {
+    // a std::array of string_view
+    constexpr auto NamesDLSSMode = magic_enum::enum_names<HackDLSSMode>();
+    /*
+    std::string valid_options = "";
+    for (const auto& name : color_names) {
+        valid_options.append(name);
+        valid_options.append(" | ");
+    }
+    */
+    // Above is not efficient
+    constexpr std::string_view Valid_DLSSMode_Choices = "DLAA | MaxQuality | Balanced | MaxPerformance | UltraPerformance";
+
+
     HackOptionDef options;
     // Skip argv[0] and convert to modern format
     std::vector<std::string> argList(argv + 1, argv + argc);  
@@ -109,7 +124,9 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
     };
 
     // parse other options only when global switch "-EnableHack" is set
-    bool         hackMode = false;
+    bool hackMode = false;
+    // If both present (they should not), take -Upscale
+    bool hasUpscaleArg = false;
     for (size_t currentArg = 0; currentArg < argList.size(); currentArg++)
     {
         std::string command = argList[currentArg];
@@ -129,15 +146,64 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
             currentArg++;
             continue;
         }
-        if (hackMode && command == "-DisplayResolution")
+
+        // See enum class HackUpsale
+        if (hackMode && command == "-Upscale")
         {
             // We require at least 1 argument
             assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
-                "-DisplayResolution requires a input to be provided (usage: -DisplayResolution <1 or 2 or 4>");
-            int resOption = std::stoi(argList[currentArg + 1]);
-            assert(resOption == 1 || resOption == 2 || resOption == 4,
-                L"usage: -DisplayResolution <1 or 2 or 4>, got %d", resOption);
-            options.displayResolution = static_cast<HackOptionDef::HackDisplayResolution>(resOption);
+                "-Upscale requires a input to be provided (usage: -Upscale <1 or 4>");
+            int usInt = std::stoi(argList[currentArg + 1]);
+
+            /// For a switch on enum, we have a more efficient approach that enables compile-time optimization.
+            /// Though the gain should be tiny since we are doing trivial things (nothing to be optimized).
+            if (auto usOptional = magic_enum::enum_cast<HackUpsale>(usInt); usOptional.has_value()) {
+                // Traditional use of magic_enum + switch
+                /*
+                HackUpsale us = usOptional.value();
+                switch (us)
+                {
+                case HackUpsale::Res1K:
+                    options.upscaleMode = HackDLSSMode::DLAA;
+                    break;
+                case HackUpsale::Res4K:
+                    options.upscaleMode = HackDLSSMode::MaxPerformance;
+                    break;
+                default:
+                    break;
+                }
+                */
+
+                options.upscaleMode = magic_enum::enum_switch(
+                    [](auto val) -> HackDLSSMode {
+                        constexpr HackUpsale c_us = val;
+                        if constexpr (c_us == HackUpsale::Res1K)
+                            return HackDLSSMode::DLAA;
+                        else if constexpr (c_us == HackUpsale::Res4K)
+                            return HackDLSSMode::MaxPerformance;
+                    }, 
+                    usOptional.value()
+                );
+            }
+            else {
+                log::warning("-Upscale accepts value 1 or 4, but got %d. Ignored", usInt);
+            }
+
+            currentArg++;
+            hasUpscaleArg = true;
+            continue;
+        }
+        if (hackMode && !hasUpscaleArg && command == "-DLSSMode") 
+        {            
+            // We require at least 1 argument
+            if(currentArg + 1 >= argList.size() || argList[currentArg + 1][0] == '-')
+                log::error("-DLSSMode requires a input to be provided. Valid choices are %s", Valid_DLSSMode_Choices);
+            std::string dlssStr = argList[currentArg + 1];
+
+            options.upscaleMode = magic_enum::enum_cast<HackDLSSMode>(dlssStr).value_or(HackDLSSMode::UNDEFINED);
+            if (options.upscaleMode == HackDLSSMode::UNDEFINED) {
+                log::error("Invalid -DLSSMode value %s. Valid choices are %s", dlssStr, Valid_DLSSMode_Choices);
+            }
 
             currentArg++;
             continue;

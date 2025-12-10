@@ -267,12 +267,16 @@ int main(int __argc, const char* const* __argv)
     //hackOptions.identifier = "WITH_DEPTH";
     
     if (hackOptions.enableHack) {
-        deviceParams.backBufferWidth = 3840;
-        deviceParams.backBufferHeight = 2160;
-        // disable fullscreen when debugging
+        // disable fullscreen when debugging, otherwise OS hangs
         deviceParams.startFullscreen = true;
         /// RGBA16_FLOAT will "disable" DLSSG, and R11G11B10_FLOAT cannot be handled by dx12.
         deviceParams.swapChainFormat = nvrhi::Format::R10G10B10A2_UNORM;
+
+        // quick change hackOptions.upscaleMode for debug
+        hackOptions.upscaleMode = StreamlineSample::HackDLSSMode::MaxQuality;
+        StreamlineSample::SetBackBufferSize(hackOptions.upscaleMode, deviceParams.backBufferWidth, deviceParams.backBufferHeight);
+        // what will happen if inconsistent mode vs BB size?
+        //hackOptions.upscaleMode = StreamlineSample::HackDLSSMode::UltraPerformance;
     }
 
 #ifdef _DEBUG
@@ -349,6 +353,8 @@ int main(int __argc, const char* const* __argv)
             uiData.EnableUI = false;
             // must turn on Relex for DLSS-FG
             uiData.REFLEX_Mode = static_cast<int>(sl::ReflexMode::eLowLatency);
+            // Use user option to set internal DLSS Mode
+            uiData.DLSS_Mode = static_cast<sl::DLSSMode>(hackOptions.upscaleMode);
         }
 
         std::shared_ptr<MultiViewportApp> pApp = std::make_shared<MultiViewportApp>(deviceManager, uiData, sceneName, scripting);

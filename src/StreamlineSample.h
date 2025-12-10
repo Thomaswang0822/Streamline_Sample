@@ -294,13 +294,30 @@ private:
 public:
 
 #pragma region Hack
+
+    /**
+     * Target post-upscale display resolution in "K"
+     * Used as a handy cmdline-arg alternative of `HackDLSSMode` enum for 2 typical test cases
+     * 1K -> 1K (DLAA) and 1K -> 4K (MaxPerformance).
+     *
+     * Users can type "-Upscale 4" other than "DLSSMode MaxPerformance“
+     */
+    enum class HackUpsale : uint32_t
+    {
+        Res1K = 1,
+        Res4K = 4
+    };
+
     /**
      * Our own enum class with values equal to internal sl::DLSSMode.
      * NOTE: it's a subset of sl::DLSSMode since we don't have 
      * eOff, eCount, and eUltraQuality (This app disables using it, see UIRenderer.h)
+     * 
+     * In our test setup, we always turn on DLSS, so UNDEFINED serves for debug check only
      */
     enum class HackDLSSMode : uint32_t
     {
+        UNDEFINED = sl::DLSSMode::eOff,                        // eOff value is 0
         DLAA = sl::DLSSMode::eDLAA,                            // 1.0x
         MaxQuality = sl::DLSSMode::eMaxQuality,                // 1.5x
         Balanced = sl::DLSSMode::eBalanced,                    // Around 1.724x, no idea why
@@ -323,17 +340,24 @@ public:
 		{ HackDLSSMode::UltraPerformance,   std::pair{5760u, 3240u} },
 	};
 
+    static inline void SetBackBufferSize(HackDLSSMode mode, uint32_t& bbWidth, uint32_t& bbHeight) {
+        // .contains() + .at() costs 2 lookup
+        if (auto it = DisplayResolutionPresets.find(mode); it != DisplayResolutionPresets.end()) {
+            bbWidth  = it->second.first;
+            bbHeight = it->second.second;
+        }
+        else {
+            // This shouldn't happen since we filter UNDEFINED out in cmdline parse, just to be safe.
+            donut::log::error("HackDLSSMode is set to UNDEFINED");
+        }
+        
+    }
+
     // general runtime options
     struct HackOptionDef
     {
         bool enableHack = false;
         std::string identifier = "";
-        enum class HackDisplayResolution
-        {
-            Res1K = 1,
-            Res2K = 2,
-            Res4K = 4
-        } displayResolution = HackDisplayResolution::Res1K;
         HackDLSSMode upscaleMode = HackDLSSMode::DLAA;
         bool parseJitter = false;
         std::vector<std::filesystem::path> hackPaths = {};
