@@ -47,6 +47,11 @@ endif()
 
 # Optional dependencies
 
+if (DONUT_WITH_WIL AND NOT TARGET wil)
+    add_library(wil INTERFACE)
+    target_include_directories(wil INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/wil/include/)
+endif()
+
 if (DONUT_WITH_TINYEXR AND NOT TARGET tinyexr)
     add_library(tinyexr INTERFACE)
     target_include_directories(tinyexr INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/tinyexr)

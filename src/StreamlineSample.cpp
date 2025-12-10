@@ -68,7 +68,9 @@
 
 #include <wrl.h> // ComPtr<ID3D11Device> impl
 
+#ifdef DONUT_WITH_WIL
 #include <wil/resource.h> // wil::shared_event
+#endif
 
 #include <xxhash.h>
 

@@ -7,7 +7,6 @@ Based on StreamlineSample. For more info on the original app by Nvidia, see <htt
 This doc contains both important usage guide and optional technical details. Here we only list out the "must read" ones.
 
 - [Project Setup](#project-setup-adapted-from-original-readme)
-- [Install WIL with NuGet](#install-wil-with-nuget)
 - [Cmdline Args](#cmdline-args)
 - [Test Machines and Possible Issue](#test-machines-and-possible-issue)
 - [Cmdline Option `BatchIndex` and Automated Script](#cmdline-option-batchindex-and-automated-script)
@@ -21,17 +20,9 @@ This doc contains both important usage guide and optional technical details. Her
 5. Switch to **capture-HDR** branch.
 6. Run `make.bat` and fix any error in the CMake configure.
 7. Open the solution in `_build/`.
-8. Install Windows Implementation Library (wil). See section below for how to.
+8. ~~Install Windows Implementation Library (wil). See section below for how to.~~ UPDATE: it has been added as a git submodule and will be immediately usable.
 9. Build Solution.
 10. Make sure you read and follow [this section](#true-hdr-capture-new-feature-and-issue) before starting any serious/actual run.
-
-## Install WIL with NuGet
-
-WIL is not implemented for typical VS installation (Desktip C++ Development). To confirm, open [StreamlineSample.cpp](src/StreamlineSample.cpp) and VS would complain `#include <wil/resource.h>` not found on line 71.
-
-First, make sure you are currently in "StreamlineSample" project (the startup project) in the solution. Now open "Search" from the top menu bar, select "Feature Search", and select first option "Manage NuGet Packages". A NuGet tab will pop out. Double check that you have "NuGet Package Manager: StreamlineSample" on the top right. Switch to "Browse" and search for "Microsoft.Windows.ImplementationLibrary". Click install and follow the prompt. You will be notified success in the output window.
-
-Finally, go back to [StreamlineSample.cpp](src/StreamlineSample.cpp). Now VS should be able to find wil. Then we can proceed to Build Solution.
 
 ## Cmdline Args
 

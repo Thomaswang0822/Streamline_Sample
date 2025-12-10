@@ -1,0 +1,3 @@
+[submodule "donut/thirdparty/wil"]
+	path = donut/thirdparty/wil
+	url = https://github.com/microsoft/wil.git

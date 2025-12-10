@@ -54,6 +54,7 @@ option(DONUT_WITH_LZ4 "Include LZ4" ON)
 option(DONUT_WITH_MINIZ "Include miniz (support for zip archives)" ON)
 option(DONUT_WITH_TASKFLOW "Include TaskFlow" ON)
 option(DONUT_WITH_TINYEXR "Include TinyEXR" ON)
+option(DONUT_WITH_WIL "Include Windows.ImplementationLibrary" ON)
 option(DONUT_WITH_UNIT_TESTS "Donut unit-tests (see CMake/CTest documentation)" OFF)
 
 option(DONUT_WITH_STREAMLINE "Enable streamline, separate package required" OFF)
