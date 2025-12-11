@@ -263,7 +263,7 @@ int main(int __argc, const char* const* __argv)
     auto hackOptions = StreamlineSample::parseHackOptions(__argc, __argv);
     // manual change for DEBUG
     //hackOptions.enableHack = false;
-    hackOptions.storeOutput = false;
+    //hackOptions.storeOutput = false;
     //hackOptions.identifier = "WITH_DEPTH";
     
     if (hackOptions.enableHack) {

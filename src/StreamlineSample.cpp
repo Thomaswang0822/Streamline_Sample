@@ -249,7 +249,7 @@ void StreamlineSample::SetDLSSMode(sl::DLSSMode& upMode)
 {
     // init to illegal value for success check.
     upMode = sl::DLSSMode::eOff;
-    // actual upscale ratio under user's setting
+    // actual upscale ratio under user's setting; TODO: shall we allow inconsistent aspect ratio?
     float xRatio = static_cast<float>(hackOptions.displayResolution.x) / hackOptions.renderResolution.x;
     float yRatio = static_cast<float>(hackOptions.displayResolution.y) / hackOptions.renderResolution.y;
     auto isInRange = [xRatio, yRatio](const RatioTriplet& tri) -> bool {
@@ -275,6 +275,10 @@ void StreamlineSample::SetDLSSMode(sl::DLSSMode& upMode)
             xRatio, yRatio
         );
     }
+
+    // At last, set DLSS mode string, to be used in export filename. Offset by 1 to remove the prefix 'e'
+    hackOptions.modeString = magic_enum::enum_name(upMode).substr(1);
+    return;
 }
 
 bool StreamlineSample::CreateCaptureDevice()
@@ -674,10 +678,10 @@ StreamlineSample::StreamlineSample(
             }
             // align frame number to 3 digits, e.g. "3" to "003" for cleaner folder view.
             std::string frameIdStr = std::string(3 /* format length */ - std::to_string(fid).length(), '0') 
-                + std::to_string(fid);
+                + std::to_string(fid) + "_";
 
             std::string filename0 = std::filesystem::absolute(hackOptions.outPath).string() + "/" +
-                hackOptions.identifier + "_frame" + frameIdStr + "A_og.exr";
+                hackOptions.identifier + "_frame" + frameIdStr + hackOptions.modeString + ".exr";
             //CaptureBitBlitLDR(hWnd, filename0);
             CaptureFramePoolHDR(filename0);
         }
@@ -702,10 +706,10 @@ StreamlineSample::StreamlineSample(
             }
             // align frame number to 3 digits, e.g. "3" to "003" for cleaner folder view.
             std::string frameIdStr = std::string(3 /* format length */ - std::to_string(fid).length(), '0')
-                + std::to_string(fid);
+                + std::to_string(fid) + "_";
 
             std::string filename1 = hackOptions.outPath.string() + "/" +
-                hackOptions.identifier + "_frame" + frameIdStr + "B_fg.exr";
+                hackOptions.identifier + "_frame" + frameIdStr + hackOptions.modeString + "_fg.exr";
             //CaptureBitBlitLDR(hWnd, filename1);
             CaptureFramePoolHDR(filename1);
 
@@ -1844,8 +1848,8 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         // Check if we need to update the rendertarget size.
         bool DLSS_resizeRequired = (m_ui.DLSS_Mode != DLSS_Last_Mode) || (m_DisplaySize.x != m_DLSS_Last_DisplaySize.x) || (m_DisplaySize.y != m_DLSS_Last_DisplaySize.y);
         
-        // HACK update DLSS mode and housekeeping
-        if (hackOptions.enableHack) {
+        // HACK update DLSS mode and housekeeping; DLSS_resizeRequired ensures we don't repeat every frame
+        if (DLSS_resizeRequired && hackOptions.enableHack) {
             SetDLSSMode(m_ui.DLSS_Mode);
 
             /// We ultimately want to force set m_RenderingRectSize, which goes out of control under these 2 settings.

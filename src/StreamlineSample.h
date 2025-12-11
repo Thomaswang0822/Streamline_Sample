@@ -330,7 +330,7 @@ public:
         // INTERNAL, determined by (equal to) input exr size
         donut::math::int2 renderResolution;
         // INTERNAL, determined by display/render resolution
-        sl::DLSSMode upMode = sl::DLSSMode::eOff;
+        std::string modeString;
 
     } hackOptions;
     // constexpr variables for hack
@@ -347,11 +347,11 @@ public:
     [[deprecated("Sleep bubble trick should NOT be used when having image hash")]]
     constexpr static int64_t StoreDelayMS = 2000;
     /**
- * @brief INTERNAL, timeout before trying another capture and see if it's a new frame.
- *
- * NOTE: dlfg.cpp (closed source) has a 100ms timeout before reset frame timer,
- * thus DuplicateTimeout * DuplicateMaxRetry cannot exceed 100ms, otherwise the app freezes.
- */
+     * @brief INTERNAL, timeout before trying another capture and see if it's a new frame.
+     *
+     * NOTE: dlfg.cpp (closed source) has a 100ms timeout before reset frame timer,
+     * thus DuplicateTimeout * DuplicateMaxRetry cannot exceed 100ms, otherwise the app freezes.
+     */
     constexpr static std::chrono::milliseconds DuplicateTimeout{ 50 };
     constexpr static uint32_t DuplicateMaxRetry = 5;
     /**
@@ -382,8 +382,22 @@ public:
      */
     std::unordered_map<uint64_t, FrameData> hash_bin;
 
+    /**
+     * Load test inputs from disk. Also, it sets hackOptions.renderResolution to the input resolution.
+     * 
+     * \throw log::error() if not all images have the same resolution.
+     * \return Success or not
+     */
     bool LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache);
 
+    /**
+     * Compute the actual display/render ratio then set DLSSMode to the one with optimal ratio closest to it,
+     * while ensuring this actual ratio is in the range. Also set hackOptions.modeString.
+     * 
+     * \see StreamlineSample::UpscaleRatioMap
+     * \throw log::error() if none of selectable modes meets the requirement.
+     * \param [out] upMode
+     */
     void SetDLSSMode(sl::DLSSMode& upMode);
 
     /**
