@@ -295,91 +295,43 @@ public:
 
 #pragma region Hack
 
+    struct RatioTriplet {
+        float low;
+        float high;
+        float optimal;
+    };
+
     /**
-     * Target post-upscale display resolution in "K"
-     * Used as a handy cmdline-arg alternative of `HackDLSSMode` enum for 2 typical test cases
-     * 1K -> 1K (DLAA) and 1K -> 4K (MaxPerformance).
+     * Alias of display resolution in "K"
+     * Used as a handy cmdline-arg alternative of 3 typical choices
+     * 1K, 2K, and 4K
      *
-     * Users can type "-Upscale 4" other than "DLSSMode MaxPerformance“
+     * Users can type "-Resolution 2" other than "-Resolution 2560 1440“
      */
-    enum class HackUpsale : uint32_t
-    {
-        Res1K = 1,
-        Res4K = 4
-    };
+    static const std::unordered_map<int, donut::math::uint2> ResolutionAliases;
 
-    /**
-     * Our own enum class with values equal to internal sl::DLSSMode.
-     * NOTE: it's a subset of sl::DLSSMode since we don't have 
-     * eOff, eCount, and eUltraQuality (This app disables using it, see UIRenderer.h)
-     * 
-     * In our test setup, we always turn on DLSS, so UNDEFINED serves for debug check only
-     */
-    enum class HackDLSSMode : uint32_t
-    {
-        UNDEFINED = sl::DLSSMode::eOff,                        // eOff value is 0
-        DLAA = sl::DLSSMode::eDLAA,                            // 1.0x
-        MaxQuality = sl::DLSSMode::eMaxQuality,                // 1.5x
-        Balanced = sl::DLSSMode::eBalanced,                    // Around 1.724x, no idea why
-        MaxPerformance = sl::DLSSMode::eMaxPerformance,        // 2.0x
-        UltraPerformance = sl::DLSSMode::eUltraPerformance,    // 3.0x
-    };
-
-    /**
-     * Unlike FSR, DLSS uses display resolution + chosen DLSS (scale) mode to determine render resolution. 
-     * We want to fix render resolution to 1K and thus reverse-engineered these values.
-     * 
-     * { key, value }: { HackDLSSMode, Display Resolution (also backbuffer size) }
-     */
-	static inline const std::unordered_map<HackDLSSMode, std::pair<uint32_t, uint32_t>> DisplayResolutionPresets = {
-
-		{ HackDLSSMode::DLAA,               std::pair{1920u, 1080u} },
-		{ HackDLSSMode::MaxQuality,         std::pair{2880u, 1620u} },
-		{ HackDLSSMode::Balanced,           std::pair{3310u, 1862u} },
-		{ HackDLSSMode::MaxPerformance,     std::pair{3840u, 2160u} },
-		{ HackDLSSMode::UltraPerformance,   std::pair{5760u, 3240u} },
-	};
-
-    static inline void SetBackBufferSize(HackDLSSMode mode, uint32_t& bbWidth, uint32_t& bbHeight) {
-        // .contains() + .at() costs 2 lookup
-        if (auto it = DisplayResolutionPresets.find(mode); it != DisplayResolutionPresets.end()) {
-            bbWidth  = it->second.first;
-            bbHeight = it->second.second;
-        }
-        else {
-            // This shouldn't happen since we filter UNDEFINED out in cmdline parse, just to be safe.
-            donut::log::error("HackDLSSMode is set to UNDEFINED");
-        }
-        
-    }
+    static const std::unordered_map<sl::DLSSMode, RatioTriplet> UpscaleRatioMap;
 
     // general runtime options
     struct HackOptionDef
     {
         bool enableHack = false;
         std::string identifier = "";
-        HackDLSSMode upscaleMode = HackDLSSMode::DLAA;
+        donut::math::uint2 displayResolution = { 2560, 1440 };
         bool parseJitter = false;
         std::vector<std::filesystem::path> hackPaths = {};
         bool storeOutput = false;
         size_t batchIndex = 0;
         std::filesystem::path outPath = "";
 
-        // INTERNAL, should not be set directly. Set by counting exr files in hackPaths
+        // INTERNAL, determined by exr files count in hackPaths
         size_t frameCount = 0;
         size_t totalBatches = 0;
+        // INTERNAL, determined by (equal to) input exr size
+        donut::math::int2 renderResolution;
+        // INTERNAL, determined by display/render resolution
+        sl::DLSSMode upMode = sl::DLSSMode::eOff;
 
-        inline void SetBackBufferDimension(uint32_t& bbWidth, uint32_t& bbHeight) const {
-            if (!DisplayResolutionPresets.contains(upscaleMode))
-                donut::log::error("Wrong DLSS Upscale mode");
-
-            bbWidth  = DisplayResolutionPresets.at(upscaleMode).first;
-            bbHeight = DisplayResolutionPresets.at(upscaleMode).second;
-        }
-
-        inline sl::DLSSMode SetDLSSMode() const {
-            return static_cast<sl::DLSSMode>(upscaleMode);
-        }
     } hackOptions;
     // constexpr variables for hack
     constexpr static uint64_t CaptureTimeoutMS = 100;
@@ -431,6 +383,8 @@ public:
     std::unordered_map<uint64_t, FrameData> hash_bin;
 
     bool LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache);
+
+    void SetDLSSMode(sl::DLSSMode& upMode);
 
     /**
      * @brief Parse from Cmdline

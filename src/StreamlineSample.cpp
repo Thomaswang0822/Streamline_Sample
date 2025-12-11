@@ -93,40 +93,57 @@ using namespace winrt::Windows::Graphics::DirectX;
 using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
 using namespace Microsoft::WRL;
 
+/// We use 4K (3840x2160) display size and reverse engineer on SLWrapper::QueryDLSSOptimalSettings()
+/// to get these values. Each comment line is the [Max, Min, Optimal] display width from the debugger.
+/// 3840 / [Max, Min, Optimal] to get [Min, Max, Optimal] RatioTriplet. (NOTE the order)
+const std::unordered_map<sl::DLSSMode, StreamlineSample::RatioTriplet> StreamlineSample::UpscaleRatioMap = {
+    // 3840, 3802, 3840
+    { sl::DLSSMode::eDLAA,              { 1.0f, 1.1f, 1.0f } },
+    // 3840，1920, 2560
+    { sl::DLSSMode::eMaxQuality,        { 1.0f, 2.0f, 1.5f } },
+    // 3840, 1920, 2227
+    { sl::DLSSMode::eBalanced,          { 1.0f, 2.0f, 1.724f } },
+    // 3840, 1920, 1920
+    { sl::DLSSMode::eMaxPerformance,    { 1.0f, 2.0f, 2.0f } },
+    // 1280, 1280, 1280
+    { sl::DLSSMode::eUltraPerformance,  { 3.0f, 3.0f, 3.0f } },
+};
+
+const std::unordered_map<int, donut::math::uint2> StreamlineSample::ResolutionAliases = {
+    { 1, uint2(1920, 1080) },
+    { 2, uint2(2560, 1440) },
+    { 4, uint2(3840, 2160) },
+};
 
 /// typical usage:
-/// -EnableHack -Identifier FG_TEST -DLSSMode "Balanced" -Upscale 4 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -BatchIndex 1 -OutputPath "../media/TEST_SCENE/screenshots"
-/// NOTE: -Upscale has higher priority than -DLSSMode.
+/// -EnableHack -Identifier FG_TEST -Resolution 2560 1440 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -BatchIndex 1 -OutputPath "../media/TEST_SCENE/screenshots"
 StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, const char* const* argv)
 {
-    // a std::array of string_view
-    constexpr auto NamesDLSSMode = magic_enum::enum_names<HackDLSSMode>();
-    /*
-    std::string valid_options = "";
-    for (const auto& name : color_names) {
-        valid_options.append(name);
-        valid_options.append(" | ");
-    }
-    */
-    // Above is not efficient
-    constexpr std::string_view Valid_DLSSMode_Choices = "DLAA | MaxQuality | Balanced | MaxPerformance | UltraPerformance";
-
-
     HackOptionDef options;
     // Skip argv[0] and convert to modern format
-    std::vector<std::string> argList(argv + 1, argv + argc);  
+    std::vector<std::string> argList(argv + 1, argv + argc);
+    // whether a arg & value pair is within range, value is given (next arg should NOT have '-' prefix)
+    bool isValid;
 
     // counter to sanity check hackPaths, result written to options.frameCount 
-    auto count_exr_files = [](const std::filesystem::path& folderPath) -> size_t {
+    auto CountEXR = [](const std::filesystem::path& folderPath) -> size_t {
         return std::count_if(std::filesystem::directory_iterator(folderPath), std::filesystem::directory_iterator{}, [](const auto& entry) {
             return entry.path().extension() == ".exr";
         });
     };
 
+    auto ValidateArg = [&argList](size_t idx, size_t numValues, const std::string_view& option) {
+        bool isValid = idx + numValues < argList.size();
+        auto it = argList.begin() + idx + 1;
+        for (; isValid && (it != argList.begin() + idx + numValues); it++)
+            isValid &= it->front() != '-';
+
+        if (!isValid)
+            log::error("%s requires %d input", option, numValues);
+    };
+
     // parse other options only when global switch "-EnableHack" is set
     bool hackMode = false;
-    // If both present (they should not), take -Upscale
-    bool hasUpscaleArg = false;
     for (size_t currentArg = 0; currentArg < argList.size(); currentArg++)
     {
         std::string command = argList[currentArg];
@@ -139,73 +156,30 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
         }
         if (hackMode && command == "-Identifier")
         {
-            // We require at least 1 argument
-            assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != '-',
-                "-Identifier requires a input to be provided (usage: -Identifier <input>");
+            ValidateArg(currentArg, 1, command);
             options.identifier = argList[currentArg + 1];
             currentArg++;
             continue;
         }
 
-        // See enum class HackUpsale
-        if (hackMode && command == "-Upscale")
-        {
-            // We require at least 1 argument
-            assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
-                "-Upscale requires a input to be provided (usage: -Upscale <1 or 4>");
-            int usInt = std::stoi(argList[currentArg + 1]);
-
-            /// For a switch on enum, we have a more efficient approach that enables compile-time optimization.
-            /// Though the gain should be tiny since we are doing trivial things (nothing to be optimized).
-            if (auto usOptional = magic_enum::enum_cast<HackUpsale>(usInt); usOptional.has_value()) {
-                // Traditional use of magic_enum + switch
-                /*
-                HackUpsale us = usOptional.value();
-                switch (us)
-                {
-                case HackUpsale::Res1K:
-                    options.upscaleMode = HackDLSSMode::DLAA;
-                    break;
-                case HackUpsale::Res4K:
-                    options.upscaleMode = HackDLSSMode::MaxPerformance;
-                    break;
-                default:
-                    break;
+        if (hackMode && (command == "-Resolution" || command == "-DisplayResolution")) {
+            /// We also accept alias represent resolution in K, e.g. -Resolution 2.
+            /// Thus we can't throw error. Check manually instead
+            if (currentArg + 1 < argList.size() && argList[currentArg + 1][0] != '-') {
+                int alias = std::stoul(argList[currentArg + 1]);
+                if (ResolutionAliases.contains(alias)) {
+                    options.displayResolution = ResolutionAliases.at(alias);
+                    currentArg++;
+                    continue;
                 }
-                */
-
-                options.upscaleMode = magic_enum::enum_switch(
-                    [](auto val) -> HackDLSSMode {
-                        constexpr HackUpsale c_us = val;
-                        if constexpr (c_us == HackUpsale::Res1K)
-                            return HackDLSSMode::DLAA;
-                        else if constexpr (c_us == HackUpsale::Res4K)
-                            return HackDLSSMode::MaxPerformance;
-                    }, 
-                    usOptional.value()
-                );
-            }
-            else {
-                log::warning("-Upscale accepts value 1 or 4, but got %d. Ignored", usInt);
             }
 
-            currentArg++;
-            hasUpscaleArg = true;
-            continue;
-        }
-        if (hackMode && !hasUpscaleArg && command == "-DLSSMode") 
-        {            
-            // We require at least 1 argument
-            if(currentArg + 1 >= argList.size() || argList[currentArg + 1][0] == '-')
-                log::error("-DLSSMode requires a input to be provided. Valid choices are %s", Valid_DLSSMode_Choices);
-            std::string dlssStr = argList[currentArg + 1];
-
-            options.upscaleMode = magic_enum::enum_cast<HackDLSSMode>(dlssStr).value_or(HackDLSSMode::UNDEFINED);
-            if (options.upscaleMode == HackDLSSMode::UNDEFINED) {
-                log::error("Invalid -DLSSMode value %s. Valid choices are %s", dlssStr, Valid_DLSSMode_Choices);
-            }
-
-            currentArg++;
+            // else, regular inputs require 2 arguments
+            ValidateArg(currentArg, 2, command);
+            options.displayResolution.x = std::stoul(argList[currentArg + 1]);
+            options.displayResolution.y = std::stoul(argList[currentArg + 2]);
+            
+            currentArg += 2;
             continue;
         }
         if (hackMode && command == "-ParseJitter")
@@ -216,17 +190,16 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
         if (hackMode && command == "-HackPaths")
         {
             // We require at least 1 argument
-            assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
-                "-HackPaths requires a input to be provided (usage: -HackPaths <input>");
+            ValidateArg(currentArg, 1, command);
 
             // store 2 paths: default NPP_JI, MVD_JI
             options.hackPaths.push_back(std::filesystem::path(argList[currentArg + 1]));
-            const auto nTargets = count_exr_files(std::filesystem::path(options.hackPaths[0]));
+            const auto nTargets = CountEXR(std::filesystem::path(options.hackPaths[0]));
 
             auto jitterPath = options.hackPaths.front().parent_path() += "/MVD_JI";
             assert(std::filesystem::exists(jitterPath), "Encoded MVs and Depths exr files must be stored in %s", jitterPath.c_str());
             options.hackPaths.push_back(jitterPath);
-            const auto jitterCount = count_exr_files(std::filesystem::path(options.hackPaths[1]));
+            const auto jitterCount = CountEXR(std::filesystem::path(options.hackPaths[1]));
 
             assert(nTargets == jitterCount,
                 "frame capture count and jitter count of (%s) (%s) should match, but got %d and %d",
@@ -249,10 +222,7 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
         }
         if (hackMode && command == "-BatchIndex")
         {
-            // We require at least 1 argument
-            assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
-                "-BatchIndex requires a input to be provided (usage: -BatchIndex <input>");
-
+            ValidateArg(currentArg, 1, command);
             options.batchIndex = std::stoull(argList[currentArg + 1]);  // size_t is u long long
 
             currentArg++;
@@ -261,9 +231,7 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
 
         if (hackMode && command == "-OutputPath")
         {
-            // We require at least 1 argument
-            assert(currentArg + 1 < argList.size() && argList[currentArg + 1][0] != L'-',
-                L"-OutputPath requires a input to be provided (usage: -OutputPath <input>");
+            ValidateArg(currentArg, 1, command);
             options.outPath = std::filesystem::path(argList[currentArg + 1]);
             currentArg++;
             continue;
@@ -275,6 +243,38 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
     options.batchIndex = std::min(options.batchIndex, options.totalBatches - 1); // cap batchIndex
 
     return options;
+}
+
+void StreamlineSample::SetDLSSMode(sl::DLSSMode& upMode)
+{
+    // init to illegal value for success check.
+    upMode = sl::DLSSMode::eOff;
+    // actual upscale ratio under user's setting
+    float xRatio = static_cast<float>(hackOptions.displayResolution.x) / hackOptions.renderResolution.x;
+    float yRatio = static_cast<float>(hackOptions.displayResolution.y) / hackOptions.renderResolution.y;
+    auto isInRange = [xRatio, yRatio](const RatioTriplet& tri) -> bool {
+        return (xRatio >= tri.low && xRatio <= tri.high) && (yRatio >= tri.low && yRatio <= tri.high);
+    };
+
+    /// Even though the actual ratio is within [low, high] range, there can be a better choice.
+    /// E.g. eMaxQuality (1.5x) has [1.0, 2.0] range, but it's better to use eMaxPerformance (2.0x)
+    float absDiff = FLT_MAX;
+    for (const auto& [mode, triplet] : UpscaleRatioMap) {
+        float diffFrom = std::max(abs(xRatio - triplet.optimal), abs(xRatio - triplet.optimal));
+        if (isInRange(triplet) && diffFrom < absDiff) {
+            upMode = mode;
+            absDiff = diffFrom;
+
+        }
+    }
+
+    if (upMode == sl::DLSSMode::eOff) {
+        log::error("DLSS failed to determine a usable mode. Display: [%d, %d], Render: [%d, %d] their ratio: [%d, %d]",
+            hackOptions.displayResolution.x, hackOptions.displayResolution.y,
+            hackOptions.renderResolution.x,  hackOptions.renderResolution.y,
+            xRatio, yRatio
+        );
+    }
 }
 
 bool StreamlineSample::CreateCaptureDevice()
@@ -938,6 +938,9 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
 {
     typedef donut::engine::TextureCache::HackDataType hackDataType;
 
+    // Use a hash map to detect duplication.
+    std::map<std::pair<uint32_t, uint32_t>, std::string> allSeenResolution;
+
     auto loadFrameCaptures = [&]
     (const std::filesystem::path& hackPath, hackDataType dtype)
         -> std::vector<std::filesystem::path>
@@ -989,6 +992,9 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
                 textureCache->hackLoadTextureFromFile(filePath, dtype);
 
             hackLoadedData.push_back(loadedTexture);
+
+            // Instead of operator[], which keeps overwriting string value
+            allSeenResolution.try_emplace({ loadedTexture->width, loadedTexture->height }, filePath.string());
         }
 
         assert(hackLoadedData.size() == FramesToReplayTotal);
@@ -1016,6 +1022,17 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
         //    textureCache->hackLoadTextureFromFile(tile_files[0], hackDataType::COLOR_HDR);
         //hackLoadedColorsHDR.resize(colorSize, loadedTiledTexture);
     }
+
+    if (allSeenResolution.size() != 1) {
+        // log then abort
+        log::warning("Input data don't have consistent resolution");
+        for (const auto& [res, pathStr] : allSeenResolution) {
+            log::warning("%s: [%d, %d]", pathStr, res.first, res.second);
+        }
+        log::error("StreamlineSample::LoadHackTextures() ABORT");
+    }
+    const auto& res = allSeenResolution.begin()->first;
+    hackOptions.renderResolution = int2(res.first, res.second);
     
     return true;
 }
@@ -1826,6 +1843,27 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
 
         // Check if we need to update the rendertarget size.
         bool DLSS_resizeRequired = (m_ui.DLSS_Mode != DLSS_Last_Mode) || (m_DisplaySize.x != m_DLSS_Last_DisplaySize.x) || (m_DisplaySize.y != m_DLSS_Last_DisplaySize.y);
+        
+        // HACK update DLSS mode and housekeeping
+        if (hackOptions.enableHack) {
+            SetDLSSMode(m_ui.DLSS_Mode);
+
+            /// We ultimately want to force set m_RenderingRectSize, which goes out of control under these 2 settings.
+            if (m_ui.DLSS_Resolution_Mode == RenderingResolutionMode::DYNAMIC || 
+                m_ui.DLSSRR_Mode != sl::DLSSMode::eOff)
+                log::error("RenderingResolutionMode::DYNAMIC or DLSSMode::eOff not supported in hack mode");
+
+            // In the regular `else if (m_ui.AAMode == AntiAliasingMode::DLSS)` below, it's set by
+            m_RecommendedDLSSSettings.optimalRenderSize = hackOptions.renderResolution;
+
+            if (DLSS_resizeRequired) {
+                // skip calling QueryDLSSOptimalSettings() since it overwrite m_RecommendedDLSSSettings
+                DLSS_Last_Mode = m_ui.DLSS_Mode;
+                m_DLSS_Last_DisplaySize = m_DisplaySize;
+                DLSS_resizeRequired = false;
+            }
+        }
+
         if (DLSS_resizeRequired) {
             // Only quality, target width and height matter here
             NVWrapper::Get().QueryDLSSOptimalSettings(m_RecommendedDLSSSettings);
@@ -2095,7 +2133,6 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
             static_cast<const void*>(hackLoadedDepths[hackFrameId]->data->data()),
             layoutDepth.rowPitch, layoutDepth.depthPitch);
 
-        auto& descHackColor = m_RenderTargets->hackHdrColor->getDesc();
         // MV and depth need to restore resources state after copy; probably because they are not virtual textures
         auto& descHackMV = m_RenderTargets->hackMotionVectors->getDesc();
         auto& descHackDepth = m_RenderTargets->Depth->getDesc();
