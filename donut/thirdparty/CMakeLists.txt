@@ -47,10 +47,21 @@ endif()
 
 # Optional dependencies
 
+if (DONUT_WITH_WIL AND NOT TARGET wil)
+    add_library(wil INTERFACE)
+    target_include_directories(wil INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/wil/include/)
+endif()
+
 if (DONUT_WITH_TINYEXR AND NOT TARGET tinyexr)
     add_library(tinyexr INTERFACE)
     target_include_directories(tinyexr INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/tinyexr)
 endif()
+
+if (DONUT_WITH_MAGIC_ENUM AND NOT TARGET magic_enum)
+    add_library(magic_enum INTERFACE)
+    target_include_directories(magic_enum INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/magic_enum/include)
+endif()
+
 
 if (DONUT_WITH_TASKFLOW AND NOT TARGET taskflow)
     add_library(taskflow INTERFACE)

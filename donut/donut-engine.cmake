@@ -52,9 +52,19 @@ if (DONUT_WITH_AUDIO)
     target_compile_definitions(donut_engine PUBLIC DONUT_WITH_AUDIO)
 endif()
 
+if (DONUT_WITH_WIL)
+    target_link_libraries(donut_engine wil)
+    target_compile_definitions(donut_engine PUBLIC DONUT_WITH_WIL)
+endif()
+
 if (DONUT_WITH_TINYEXR)
     target_link_libraries(donut_engine tinyexr)
     target_compile_definitions(donut_engine PUBLIC DONUT_WITH_TINYEXR)
+endif()
+
+if (DONUT_WITH_MAGIC_ENUM)
+    target_link_libraries(donut_engine magic_enum)
+    target_compile_definitions(donut_engine PUBLIC DONUT_WITH_MAGIC_ENUM)
 endif()
 
 set_target_properties(donut_engine PROPERTIES FOLDER Donut)

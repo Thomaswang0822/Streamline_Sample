@@ -294,26 +294,44 @@ private:
 public:
 
 #pragma region Hack
+
+    struct RatioTriplet {
+        float low;
+        float high;
+        float optimal;
+    };
+
+    /**
+     * Alias of display resolution in "K"
+     * Used as a handy cmdline-arg alternative of 3 typical choices
+     * 1K, 2K, and 4K
+     *
+     * Users can type "-Resolution 2" other than "-Resolution 2560 1440“
+     */
+    static const std::unordered_map<int, donut::math::uint2> ResolutionAliases;
+
+    static const std::unordered_map<sl::DLSSMode, RatioTriplet> UpscaleRatioMap;
+
     // general runtime options
     struct HackOptionDef
     {
         bool enableHack = false;
         std::string identifier = "";
-        enum class HackRenderResolution
-        {
-            RR_1K = 1,
-            RR_2K = 2,
-            RR_4K = 4
-        } renderResolution = HackRenderResolution::RR_1K;
+        donut::math::uint2 displayResolution = { 2560, 1440 };
         bool parseJitter = false;
         std::vector<std::filesystem::path> hackPaths = {};
         bool storeOutput = false;
         size_t batchIndex = 0;
         std::filesystem::path outPath = "";
 
-        // INTERNAL, should not be set directly. Set by counting exr files in hackPaths
+        // INTERNAL, determined by exr files count in hackPaths
         size_t frameCount = 0;
         size_t totalBatches = 0;
+        // INTERNAL, determined by (equal to) input exr size
+        donut::math::int2 renderResolution;
+        // INTERNAL, determined by display/render resolution
+        std::string modeString;
+
     } hackOptions;
     // constexpr variables for hack
     constexpr static uint64_t CaptureTimeoutMS = 100;
@@ -329,11 +347,11 @@ public:
     [[deprecated("Sleep bubble trick should NOT be used when having image hash")]]
     constexpr static int64_t StoreDelayMS = 2000;
     /**
- * @brief INTERNAL, timeout before trying another capture and see if it's a new frame.
- *
- * NOTE: dlfg.cpp (closed source) has a 100ms timeout before reset frame timer,
- * thus DuplicateTimeout * DuplicateMaxRetry cannot exceed 100ms, otherwise the app freezes.
- */
+     * @brief INTERNAL, timeout before trying another capture and see if it's a new frame.
+     *
+     * NOTE: dlfg.cpp (closed source) has a 100ms timeout before reset frame timer,
+     * thus DuplicateTimeout * DuplicateMaxRetry cannot exceed 100ms, otherwise the app freezes.
+     */
     constexpr static std::chrono::milliseconds DuplicateTimeout{ 50 };
     constexpr static uint32_t DuplicateMaxRetry = 5;
     /**
@@ -364,7 +382,23 @@ public:
      */
     std::unordered_map<uint64_t, FrameData> hash_bin;
 
+    /**
+     * Load test inputs from disk. Also, it sets hackOptions.renderResolution to the input resolution.
+     * 
+     * \throw log::error() if not all images have the same resolution.
+     * \return Success or not
+     */
     bool LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache);
+
+    /**
+     * Compute the actual display/render ratio then set DLSSMode to the one with optimal ratio closest to it,
+     * while ensuring this actual ratio is in the range. Also set hackOptions.modeString.
+     * 
+     * \see StreamlineSample::UpscaleRatioMap
+     * \throw log::error() if none of selectable modes meets the requirement.
+     * \param [out] upMode
+     */
+    void SetDLSSMode(sl::DLSSMode& upMode);
 
     /**
      * @brief Parse from Cmdline

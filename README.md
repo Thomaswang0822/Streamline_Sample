@@ -7,7 +7,6 @@ Based on StreamlineSample. For more info on the original app by Nvidia, see <htt
 This doc contains both important usage guide and optional technical details. Here we only list out the "must read" ones.
 
 - [Project Setup](#project-setup-adapted-from-original-readme)
-- [Install WIL with NuGet](#install-wil-with-nuget)
 - [Cmdline Args](#cmdline-args)
 - [Test Machines and Possible Issue](#test-machines-and-possible-issue)
 - [Cmdline Option `BatchIndex` and Automated Script](#cmdline-option-batchindex-and-automated-script)
@@ -21,17 +20,9 @@ This doc contains both important usage guide and optional technical details. Her
 5. Switch to **capture-HDR** branch.
 6. Run `make.bat` and fix any error in the CMake configure.
 7. Open the solution in `_build/`.
-8. Install Windows Implementation Library (wil). See section below for how to.
+8. ~~Install Windows Implementation Library (wil). See section below for how to.~~ UPDATE: it has been added as a git submodule and will be immediately usable.
 9. Build Solution.
 10. Make sure you read and follow [this section](#true-hdr-capture-new-feature-and-issue) before starting any serious/actual run.
-
-## Install WIL with NuGet
-
-WIL is not implemented for typical VS installation (Desktip C++ Development). To confirm, open [StreamlineSample.cpp](src/StreamlineSample.cpp) and VS would complain `#include <wil/resource.h>` not found on line 71.
-
-First, make sure you are currently in "StreamlineSample" project (the startup project) in the solution. Now open "Search" from the top menu bar, select "Feature Search", and select first option "Manage NuGet Packages". A NuGet tab will pop out. Double check that you have "NuGet Package Manager: StreamlineSample" on the top right. Switch to "Browse" and search for "Microsoft.Windows.ImplementationLibrary". Click install and follow the prompt. You will be notified success in the output window.
-
-Finally, go back to [StreamlineSample.cpp](src/StreamlineSample.cpp). Now VS should be able to find wil. Then we can proceed to Build Solution.
 
 ## Cmdline Args
 
@@ -46,7 +37,10 @@ It works almost the same. Below is copied from FSR Offline Runner README.
 
 - EnableHack: a global switch, default false. If false, the app will run in its original behavior, rendering Sponza Palace.
 - Identifier: a string that helps you identify this run, default "UNDEFINED". Usually set to scene name.
-- RenderResolution: a int that controls the render resolution in K, default 1. Only accepted values are 1, 2, and 4.
+- Resolution/DisplayResolution: accepts 2 formats. See [this section](#resolution-system-in-dlss) for more details. TL;DR: User specifies display resolution here, render resolution is auto determined by the pre-scaled input image size, and DLSS mode is internally decided to pass check by DLSS.
+  - `-Resolution <width> <height>`. This is the general option and gives full flexibility. i.e. Except for extreme resolutions like 10x7, 19200x10800, users can choose any value, like 2880x1620.
+  - `-Resolution <alias>`, where `<alias>` accepts valid values 1, 2, and 4. This is a handy alternative for the common 1K, 2K, and 4K settings.
+- Upscale: an int that serves as a shorter alias for DLSSMode for 2 typical test settings: 1K -> 1K and 1K -> 4K. The only valid values are 1 and 4, and the app will set DLSS mode to `DLAA` and `MaxPerformance` accordingly. It has a higher priority than DLSSMode, so users can omit -DLSSMode in these 2 settings.
 - ParseJitter: whether to parse and use the jitter data from input filenames, default false. Currently we only have it in 1K inputs, so it will be forced to false it render resolution is not 1K.
 - HackPaths: **a single folder relative path** to the input frame capture folder, default *"../media/TEST_SCENE/NPP_JI"*. The path to the encoded MVs and Depths will be constructed automatically by replacing "NPP_JI" to "MVD_JI".
 - StoreOutput: whether to store output (screenshots), default false.
@@ -58,7 +52,7 @@ It works almost the same. Below is copied from FSR Offline Runner README.
 
 ./StreamlineSample.exe  -EnableHack \
                         -Identifier "Cmdline_TEST" \
-                        -RenderResolution 1 \
+                        -DisplayResolution 4 \
                         -ParseJitter \
                         -HackPaths "../media/TEST_SCENE/NPP_JI" \
                         -StoreOutput \
@@ -69,8 +63,73 @@ It works almost the same. Below is copied from FSR Offline Runner README.
 Also, it would be very convenient to set them up in the VS Debugger such that each test run is a one-click. Put this single-line arg list to StreamlineSample  Property Pages, in Configuration Properties -> Debugging -> Commandline Arguments. Adjust if needed. Make sure the `OutputPath` (e.g. `media/TEST_SCENE/screenshots`) exists.
 
 ```shell
--EnableHack -Identifier FG_TEST -RenderResolution 1 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -BatchIndex 2 -OutputPath "../media/TEST_SCENE/screenshots"
+-EnableHack -Identifier FG_TEST -DisplayResolution 4 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -BatchIndex 2 -OutputPath "../media/TEST_SCENE/screenshots"
 ```
+
+## Resolution System in DLSS
+
+Both DLSS and AMD's FSR **internally** determine render resolution based on user-selected display resolution + SR mode (DLSS calls it DLSS mode, FSR calls it scale preset). FSR gives explicit upscale ratio of these modes. Though these ratios of DLSS were found from the code base or online, we tested them out. They are the same as AMD's except for `Balanced` mode, which is a strange value round 1.724 (sqrt 3 is 1.732)
+
+```cpp
+/// From FSR
+switch (m_ScalePreset)
+{
+case FSRScalePreset::NativeAA:
+    m_UpscaleRatio = 1.0f;
+    break;
+case FSRScalePreset::Quality:
+    m_UpscaleRatio = 1.5f;
+    break;
+case FSRScalePreset::Balanced:
+    m_UpscaleRatio = 1.7f;
+    break;
+case FSRScalePreset::Performance:
+    m_UpscaleRatio = 2.0f;
+    break;
+case FSRScalePreset::UltraPerformance:
+    m_UpscaleRatio = 3.0f;
+    break;
+case FSRScalePreset::Custom:
+default:
+    // Leave the upscale ratio at whatever it was
+    break;
+}
+```
+
+But this is different from our ideal: we want to specify both render and display resolution. Without intervention, DLSS sometimes compute a render resolution we don't want (should be the same as input image size). The most typical example is the 1K -> 2K setting (2560x1440 is 1.33 rather than 1.5 times of 1920x1080 BTW).
+Since there is no DLSS mode with a 1.33x upscale ratio, we can't expect DLSS to set render resolution to 1920x1080.
+
+The good news is, DLSS allows the actual display/render ratio to be different from the internal ratio above, as long as the actual ratio is within a range. We tested them out as below.
+
+```cpp
+/// We use 4K (3840x2160) display size and reverse engineer on SLWrapper::QueryDLSSOptimalSettings()
+/// to get these values. Each comment line is the [Max, Min, Optimal] display width from the debugger.
+/// 3840 / [Max, Min, Optimal] to get [Min, Max, Optimal] RatioTriplet. (NOTE the order)
+const std::unordered_map<sl::DLSSMode, StreamlineSample::RatioTriplet> StreamlineSample::UpscaleRatioMap = {
+    // 3840, 3802, 3840
+    { sl::DLSSMode::eDLAA,              { 1.0f, 1.1f, 1.0f } },
+    // 3840，1920, 2560
+    { sl::DLSSMode::eMaxQuality,        { 1.0f, 2.0f, 1.5f } },
+    // 3840, 1920, 2227
+    { sl::DLSSMode::eBalanced,          { 1.0f, 2.0f, 1.724f } },
+    // 3840, 1920, 1920
+    { sl::DLSSMode::eMaxPerformance,    { 1.0f, 2.0f, 2.0f } },
+    // 1280, 1280, 1280
+    { sl::DLSSMode::eUltraPerformance,  { 3.0f, 3.0f, 3.0f } },
+};
+```
+
+If out of range, like having actual ratio 3.0 but use `eMaxQuality`, error will be thrown.
+
+> [20-29-30][streamline][info][tid:57940][289s:264ms:511us]commonEntry.cpp:1059[ngxLog] [NGXDLAA::EvaluateFeature:1086] Error: Dynamic scaling error for PerfQuality Mode (NVSDK_NGX_PerfQuality_Value_MaxQuality,2). RenderSubrect (1920x1080) outside of Min (2880x1620) and Max (5760x3240) dynamic res.
+
+Thus, our design is to allow users to directly specify both display and render resolution but disallow setting DLSS mode. Render resolution is not configurable from cmdline, but auto-determined by size of input images, which is user-decided.
+The app will decide and set the appropriate DLSS mode. The tie-breaker will be the optimal ratio, the 3rd element in the `RatioTriplet` above. DLSS (at least in this app) simply divide display resolution by this optimal ratio to get render resolution.
+
+Lastly, a quick inspection on the data above tells us:
+
+1. The display resolution being set MUST be 1.0x to 2.0x of the input image resolution, length-wise.
+2. EXCEPT for a single case when the ratio is EXACTLY 3.0x. In `eUltraPerformance` mode, input data with 640x360, 853x480 and 1280x720 resolution should be passed to 1K, 2K, 4K setting respectively.
 
 ## Tips
 
@@ -140,7 +199,7 @@ confirming correctness on certain machines, not for production.
 Previously when debugging, to speed up each run, we only loaded 10/60 of total input frames (and this is where the deprecated `OutputMaxCount` option originated). After using all 60 inputs, we found a critical issue:
 
 ```console
-WARNING: [13-53-08][streamline][warn][tid:30096][41s:619ms:032us]dlfgPresent.cpp:1260[presentCommon] Frame rate over 100.00ms, reseting frame timer
+WARNING: [13-53-08][streamline][warn][tid:30096][41s:619ms:032us]dlfgPresent.cpp:1260[presentCommon] Frame rate over 100.00ms, resetting frame timer
 ```
 
 After some careful experiments, we found that this 100 ms or 10 FPS redline would be reached if we do ANYTHING additional in a regular pipeline. The result of frame timer being reset is that dlfg will disable presenting FG frames, and thus breaks our screen capture design entirely.

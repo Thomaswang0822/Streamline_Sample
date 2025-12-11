@@ -267,12 +267,16 @@ int main(int __argc, const char* const* __argv)
     //hackOptions.identifier = "WITH_DEPTH";
     
     if (hackOptions.enableHack) {
-        deviceParams.backBufferWidth = 3840;
-        deviceParams.backBufferHeight = 2160;
-        // disable fullscreen when debugging
+        // disable fullscreen when debugging, otherwise OS hangs
         deviceParams.startFullscreen = true;
+
         /// RGBA16_FLOAT will "disable" DLSSG, and R11G11B10_FLOAT cannot be handled by dx12.
         deviceParams.swapChainFormat = nvrhi::Format::R10G10B10A2_UNORM;
+        
+        // quick change hackOptions.displayResolution for debug
+        //hackOptions.displayResolution = uint2(1920, 1080);
+        deviceParams.backBufferWidth  = hackOptions.displayResolution.x;
+        deviceParams.backBufferHeight = hackOptions.displayResolution.y;
     }
 
 #ifdef _DEBUG
