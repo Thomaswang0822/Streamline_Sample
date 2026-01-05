@@ -74,6 +74,8 @@
 
 #include <xxhash.h>
 
+#include <unordered_set>
+
 using namespace donut;
 using namespace donut::math;
 using namespace donut::engine;
@@ -116,7 +118,7 @@ const std::unordered_map<int, donut::math::uint2> StreamlineSample::ResolutionAl
 };
 
 /// typical usage:
-/// -EnableHack -Identifier FG_TEST -Resolution 2560 1440 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -BatchIndex 1 -OutputPath "../media/TEST_SCENE/screenshots"
+/// -EnableHack -DisplayResolution 2560 1440 -ParseJitter -BatchIndex 1 -HackPaths "../media/TEST_SCENE" -StoreOutput -AlignFilename -OutputPath "../media/TEST_SCENE/screenshots"
 StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, const char* const* argv)
 {
     HackOptionDef options;
@@ -132,6 +134,7 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
         });
     };
 
+    // throw if not valid
     auto ValidateArg = [&argList](size_t idx, size_t numValues, const std::string_view& option) {
         bool isValid = idx + numValues < argList.size();
         auto it = argList.begin() + idx + 1;
@@ -191,29 +194,24 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
         {
             // We require at least 1 argument
             ValidateArg(currentArg, 1, command);
+            options.hackPaths.clear();
 
             // store 2 paths: default NPP_JI, MVD_JI
             options.hackPaths.push_back(std::filesystem::path(argList[currentArg + 1]));
-            const auto nTargets = CountEXR(std::filesystem::path(options.hackPaths[0]));
 
-            auto jitterPath = options.hackPaths.front().parent_path() += "/MVD_JI";
-            assert(std::filesystem::exists(jitterPath), "Encoded MVs and Depths exr files must be stored in %s", jitterPath.c_str());
-            options.hackPaths.push_back(jitterPath);
-            const auto jitterCount = CountEXR(std::filesystem::path(options.hackPaths[1]));
+            bool isGivenBoth = currentArg + 2 < argList.size() && argList[currentArg + 2][0] != '-';
+            if (isGivenBoth) {
+                options.hackPaths.push_back(argList[currentArg + 2]);
+            }
+            else {
+                // front stores parent path
+                options.hackPaths.push_back(options.hackPaths.front().string() + MVDSubdir);
+                options.hackPaths.front() += ColorSubdir;
+            }
 
-            assert(nTargets == jitterCount,
-                "frame capture count and jitter count of (%s) (%s) should match, but got %d and %d",
-                options.hackPaths[0].c_str(), options.hackPaths[1].c_str(),
-                nTargets, gtCount, jitterCount);
-
-            // IMPORTANT: internal member frameCount and totalBatches can ONLY be set here.
-            options.frameCount = nTargets;
-            options.totalBatches = nTargets / FramesToCapture +
-                (nTargets % FramesToCapture > 0); // round up
-            assert(options.totalBatches > 0, "options.totalBatches should be at least 1");
-
-            currentArg++;
+            currentArg += isGivenBoth ? 2 : 1;
             continue;
+            // IMPORTANT: internal member frameCount and totalBatches set in PostProcess()
         }
         if (hackMode && command == "-StoreOutput")
         {
@@ -229,6 +227,12 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
             continue;
         }
 
+        if (hackMode && command == "-AlignFilename")
+        {
+            options.alignFilename = true;
+            continue;
+        }
+
         if (hackMode && command == "-OutputPath")
         {
             ValidateArg(currentArg, 1, command);
@@ -238,11 +242,86 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
         }
     }
 
-    if (hackMode)
-        assert(options.frameCount > 0, "hackOptions.frameCount is not set because -HackPaths <PATH> is missing or has wrong format.");
-    options.batchIndex = std::min(options.batchIndex, options.totalBatches - 1); // cap batchIndex
-
+    options.PostProcess();
     return options;
+}
+
+bool StreamlineSample::HackOptionDef::PostProcess()
+{
+    // sanity check
+    if (hackPaths.size() < 2)
+        log::error("HackPaths not given in cmdline args");
+    if (!std::filesystem::exists(hackPaths[0]) || !std::filesystem::exists(hackPaths[1]))
+        log::error("Not both of Color Path %s and MVD path %s exist", hackPaths[0].c_str(), hackPaths[1].c_str());
+
+    // If outPath not given, set to <parent of Color Path>/outputs
+    if (outPath == "") {
+        outPath = std::filesystem::path(hackPaths[0]).parent_path() / "outputs";
+    }
+
+    // Set frameCount to MVD count
+    frameCount = static_cast<size_t>(std::count_if(
+        std::filesystem::directory_iterator(hackPaths[1]),
+        std::filesystem::directory_iterator{},
+        [](const auto& entry) {return entry.path().extension() == ".exr"; }
+    ));
+    // Then set totalBatches
+    totalBatches = frameCount / FramesToCapture +
+        (frameCount % FramesToCapture > 0); // round up
+    if (totalBatches == 0)
+        log::error("Found %d .exr in %s", frameCount, hackPaths[1].c_str());
+    // And cap batchIndex
+    batchIndex = std::min(batchIndex, totalBatches - 1);
+
+    size_t colorCount = 0;  // will count later
+
+    // To check duplicate
+    size_t minID = std::numeric_limits<size_t>::max();
+    std::unordered_set<std::string> allSeenPrefix;
+
+    for (const auto& it : std::filesystem::directory_iterator(hackPaths[0]))
+    {
+        const auto& fullPath = it.path();
+        if (fullPath.extension() != ".exr")
+            continue;
+
+        colorCount++;
+
+        // construct prefix until we hit a numeric frameID token
+        std::string pathPrefix = "";
+        std::istringstream pathSS(fullPath.stem().generic_string());
+        for (std::string token; std::getline(pathSS, token, '_'); ) {
+            if (!token.empty() && std::all_of(token.begin(), token.end(), ::isdigit)) {
+                minID = std::min(minID, std::stoull(token));
+                allSeenPrefix.emplace(pathPrefix);
+                break;
+            }
+            else {
+                // not frameID yet
+                pathPrefix += token + "_";
+            }
+        } // end parsing one file
+    }
+    if (allSeenPrefix.empty())
+        log::error("%s has no .exr files", hackPaths[0].c_str());
+    else if (allSeenPrefix.size() > 1)
+        log::error("Found duplicate filename prefix when `alignFilename` is set: %s and %s",
+            allSeenPrefix.begin()->c_str(),
+            std::next(allSeenPrefix.begin())->c_str());
+    else if (alignFilename || identifier == "") {
+        // overwrite identifier even if user has set it; NOTE the hashkey has an extra '_'
+        identifier = allSeenPrefix.begin()->data();
+        identifier.pop_back();
+
+        baseFrameIndex = minID;
+    }
+
+
+    if (frameCount != colorCount)
+        log::error("%s and %s don't have equal .exr count: [%d, %d]", hackPaths[0].c_str(), hackPaths[1].c_str(), frameCount, colorCount);
+
+
+    return true;
 }
 
 void StreamlineSample::SetDLSSMode(sl::DLSSMode& upMode)
