@@ -746,8 +746,6 @@ StreamlineSample::StreamlineSample(
             frameIdx >= FramesToWarmup + 1 && // have skipped warmup frames
             frameIdx <= FramesToCapture + FramesToWarmup) // within range
         {
-            HWND hWnd = glfwGetWin32Window(m.GetWindow());
-
 			// map frame N to frame N - 1
             uint32_t fid = (frameIdx + FramesToCapture - FramesToWarmup - 1) % FramesToCapture // 0 to 14
                 + hackOptions.batchIndex * FramesToCapture; // 0 to 59
@@ -755,13 +753,16 @@ StreamlineSample::StreamlineSample(
                 // if frameCount = 50, frame 50-59 does not exist
                 return;
             }
-            // align frame number to 3 digits, e.g. "3" to "003" for cleaner folder view.
-            std::string frameIdStr = std::string(3 /* format length */ - std::to_string(fid).length(), '0') 
+            if (hackOptions.alignFilename) {
+                fid += hackOptions.baseFrameIndex;
+			}
+            // align frameID to 4 digits, e.g. "3" to "0003" for cleaner folder view.
+            std::string frameIdStr = std::string(4 /* format length */ - std::to_string(fid).length(), '0') 
                 + std::to_string(fid) + "_";
 
             std::string filename0 = std::filesystem::absolute(hackOptions.outPath).string() + "/" +
-                hackOptions.identifier + "_frame" + frameIdStr + hackOptions.modeString + ".exr";
-            //CaptureBitBlitLDR(hWnd, filename0);
+                hackOptions.identifier + "_" + frameIdStr + hackOptions.modeString + ".exr";
+            //CaptureBitBlitLDR(glfwGetWin32Window(m.GetWindow()), filename0);
             CaptureFramePoolHDR(filename0);
         }
         // CaptureBitBlitLDR() and CaptureFramePoolHDR() will handle the synchronization internally.
@@ -773,8 +774,6 @@ StreamlineSample::StreamlineSample(
             frameIdx >= FramesToWarmup + 1 && // have skipped warmup frames
             frameIdx <= FramesToCapture + FramesToWarmup) // within range
         {
-            HWND hWnd = glfwGetWin32Window(m.GetWindow());
-
             // map frame N to frame N - 1
             uint32_t fid = (frameIdx + FramesToCapture - FramesToWarmup - 1) % FramesToCapture // 0 to 14
                 + hackOptions.batchIndex * FramesToCapture; // 0 to 59
@@ -783,13 +782,16 @@ StreamlineSample::StreamlineSample(
                 NVWrapper::Get().ReflexCallback_PresentEnd(m, frameIdx);
                 return;
             }
-            // align frame number to 3 digits, e.g. "3" to "003" for cleaner folder view.
-            std::string frameIdStr = std::string(3 /* format length */ - std::to_string(fid).length(), '0')
+            if (hackOptions.alignFilename) {
+                fid += hackOptions.baseFrameIndex;
+            }
+            // align frameID to 4 digits, e.g. "3" to "0003" for cleaner folder view.
+            std::string frameIdStr = std::string(4 /* format length */ - std::to_string(fid).length(), '0')
                 + std::to_string(fid) + "_";
 
             std::string filename1 = hackOptions.outPath.string() + "/" +
-                hackOptions.identifier + "_frame" + frameIdStr + hackOptions.modeString + "_fg.exr";
-            //CaptureBitBlitLDR(hWnd, filename1);
+                hackOptions.identifier + "_" + frameIdStr + hackOptions.modeString + "_fg.exr";
+            //CaptureBitBlitLDR(glfwGetWin32Window(m.GetWindow()), filename1);
             CaptureFramePoolHDR(filename1);
 
         }
@@ -1019,90 +1021,74 @@ winrt_foundation::IAsyncAction StreamlineSample::CleanupMediaCaptureAsync() {
 
 bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache)
 {
-    typedef donut::engine::TextureCache::HackDataType hackDataType;
-
     // Use a hash map to detect duplication.
     std::map<std::pair<uint32_t, uint32_t>, std::string> allSeenResolution;
 
-    auto loadFrameCaptures = [&]
-    (const std::filesystem::path& hackPath, hackDataType dtype)
-        -> std::vector<std::filesystem::path>
-    {
-        // Immediately invoked lambda
-        auto& hackLoadedData = [dtype, this]() -> std::vector<std::shared_ptr<donut::engine::TextureData>>&
+    const auto& colorPath = hackOptions.hackPaths[0];
+    const auto& mvdPath = hackOptions.hackPaths[1];
+    // Must add all (e.g. 60) file paths for batch loading logic, see below.
+    auto populatePathList = [](std::filesystem::path folderPath) -> std::vector<std::filesystem::path>
         {
-            switch (dtype) {
-            case hackDataType::COLOR_HDR:
-                return hackLoadedColorsHDR;
-            case hackDataType::MOTION_VECTORS:
-                return hackLoadedMVs;
-            case hackDataType::GBUFFER_DEPTH:
-                return hackLoadedDepths;
-            default:
-                log::error("Wrong hackDataType");
+            std::vector<std::filesystem::path> outPaths;
+            for (const auto& entry : std::filesystem::directory_iterator(folderPath))
+            {
+                if (entry.path().extension() == ".exr")
+                    outPaths.push_back(entry.path());
             }
-        }();
-            
-        std::vector<std::filesystem::path> filePaths;
-        size_t nFiles = textureCache->TraverseFolderPath(hackPath, filePaths);
-        // double check
-        assert(nFiles == hackOptions.frameCount,
-            "#input files counted by TraverseFolder() (%d) and lambda function in parser (%d) don't match.",
-            nTextures,
-            hackOptions.frameCount);
+            // Sort by frame order (assuming filenames contain frameID and start differing from it)
+            std::sort(outPaths.begin(), outPaths.end());
 
+            return outPaths;
+        };
+    const auto colorFiles = populatePathList(colorPath);
+    const auto mvdFiles = populatePathList(mvdPath);
+    if (colorFiles.size() != mvdFiles.size()) {
+        log::error("Different exr file count in %s (%d) and %s (%d)", 
+            colorPath.c_str(), colorFiles.size(),
+            mvdPath.c_str(), mvdFiles.size());
+    }
 
-        if (nFiles < hackOptions.frameCount) {
-            log::error("Expect total %d frames more than %s number of input frames: %d",
-                hackOptions.frameCount, hackPath.generic_string(), nFiles);
+    /// Here, we ALWAYS read 3 (for warm up) + 15 + 1 (for computing last 15th frame correctly) inputs.
+    /// e.g. if batchIndex = 0 (we want to capture frames 0 to 14), we load frames 0 to 14 
+    /// PLUS frame -3, -2, -1 (57 to 59) for warm up.
+    /// batchIndex: warmupStart
+    /// 0: -3, 1: 12, 2: 27, 3: 42
+    /// Thus we must use signed type.
+    int32_t warmupStart = static_cast<int32_t>(hackOptions.batchIndex * FramesToCapture) - 3;
+    // int + uint = uint, so cast to avoid overflow; this can go above .frameCount
+    int32_t loadEnd = warmupStart + static_cast<int32_t>(FramesToReplayTotal);
+
+    /// For last batch, e.g. frameCount = 50, we go from 42 to 49 then wrap around
+    for (int32_t i = warmupStart; i < loadEnd; ++i) {
+        size_t frameIdx = static_cast<size_t>(i < 0 ? i + hackOptions.frameCount : i) % hackOptions.frameCount;
+
+        auto loadedColor = textureCache->hackLoadColorFromFile(colorFiles[frameIdx].generic_string());
+        hackLoadedColorsHDR.emplace_back(loadedColor);
+        auto [loadedMV, loadedDepth] = textureCache->hackLoadMVDFromFile(mvdFiles[frameIdx].generic_string());
+        hackLoadedMVs.push_back(loadedMV);
+        hackLoadedDepths.push_back(loadedDepth);
+
+        // Instead of operator[], which keeps overwriting string value
+        allSeenResolution.try_emplace({ loadedColor->width, loadedColor->height }, loadedColor->path);
+        allSeenResolution.try_emplace({ loadedMV->width, loadedMV->height }, loadedMV->path);
+        allSeenResolution.try_emplace({ loadedDepth->width, loadedDepth->height }, loadedDepth->path);
+
+        if (hackOptions.parseJitter) {
+            hackLoadedJitterOffsets.emplace_back(
+                textureCache->hackLoadJitterDataFromFilename(colorFiles[frameIdx].stem().generic_string())
+            );
         }
+    }
 
-        /// Here, we ALWAYS read 3 (for warm up) + 15 + 1 (for computing last 15th frame correctly) inputs.
-        /// e.g. if batchIndex = 0 (we want to capture frames 0 to 14), we load frames 0 to 14 
-        /// PLUS frame -3, -2, -1 (57 to 59) for warm up.
-        /// batchIndex: warmupStart
-        /// 0: -3, 1: 12, 2: 27, 3: 42
-        int warmupStart = static_cast<int>(hackOptions.batchIndex * FramesToCapture) - 3;
-        
-        /// For last batch, e.g. frameCount = 50, we go from 42 to 49 then wrap around
-        /// 
-        /// int + uint = uint, so cast to avoid overflow
-        for (int i = warmupStart; i < warmupStart + static_cast<int>(FramesToReplayTotal); ++i) {
-            size_t frameIdx = static_cast<size_t>(i < 0 ? i + hackOptions.frameCount : i) % hackOptions.frameCount;
-            auto& filePath = filePaths[frameIdx];
-
-            std::shared_ptr<donut::engine::TextureData> loadedTexture = 
-                textureCache->hackLoadTextureFromFile(filePath, dtype);
-
-            hackLoadedData.push_back(loadedTexture);
-
-            // Instead of operator[], which keeps overwriting string value
-            allSeenResolution.try_emplace({ loadedTexture->width, loadedTexture->height }, filePath.string());
-        }
-
-        assert(hackLoadedData.size() == FramesToReplayTotal);
-
-        if (dtype == hackDataType::COLOR_HDR && hackOptions.parseJitter) {
-            // should parse jitter
-            textureCache->LoadJitterFromFileLists(filePaths, hackLoadedJitterOffsets,
-                FramesToReplayTotal, FramesToCapture);
-        }
-        return filePaths;
-    };
-
-    auto exrFiles = loadFrameCaptures(hackOptions.hackPaths[0], hackDataType::COLOR_HDR);
-    auto mvFiles = loadFrameCaptures(hackOptions.hackPaths[1], hackDataType::MOTION_VECTORS);
-    auto depthFiles = loadFrameCaptures(hackOptions.hackPaths[1], hackDataType::GBUFFER_DEPTH);
-
-    // DEBUG
+    // DEBUG tiled exr loading
     {
         //const std::filesystem::path tile_path("../media/TEST_SCENE/TILED_IN");
-        //std::vector<std::filesystem::path> tile_files;
-        //textureCache->TraverseFolderPath(tile_path, tile_files);  // this would be 1
+        //// this would be 1
+        //std::vector<std::filesystem::path> tile_files = populatePathList(tile_path);
         //const auto colorSize = hackLoadedColorsHDR.size();
         //hackLoadedColorsHDR.clear();
-        //std::shared_ptr<donut::engine::TextureData> loadedTiledTexture =
-        //    textureCache->hackLoadTextureFromFile(tile_files[0], hackDataType::COLOR_HDR);
+        //auto loadedTiledTexture =
+        //    textureCache->hackLoadColorFromFile(tile_files[0].generic_string());
         //hackLoadedColorsHDR.resize(colorSize, loadedTiledTexture);
     }
 
@@ -1115,6 +1101,7 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
         log::error("StreamlineSample::LoadHackTextures() ABORT");
     }
     const auto& res = allSeenResolution.begin()->first;
+    // final piece of hack options
     hackOptions.renderResolution = int2(res.first, res.second);
     
     return true;
@@ -2676,10 +2663,6 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         if (!hash_bin.empty()) {
             log::info("Saving %d captured frames in the end.", hash_bin.size());
             for (const auto& [hashKey, frameData] : hash_bin) {
-                if (frameData.filename.find("fg.exr") == std::string::npos) {
-                    // we don't write rendered frame to FS
-                    continue;
-                }
                 bool success = SaveStagingTextureDataToEXR(
                     frameData.data.data(),
                     frameData.rowPitch,

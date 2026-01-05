@@ -268,7 +268,7 @@ int main(int __argc, const char* const* __argv)
     
     if (hackOptions.enableHack) {
         // disable fullscreen when debugging, otherwise OS hangs
-        deviceParams.startFullscreen = true;
+        //deviceParams.startFullscreen = true;
 
         /// RGBA16_FLOAT will "disable" DLSSG, and R11G11B10_FLOAT cannot be handled by dx12.
         deviceParams.swapChainFormat = nvrhi::Format::R10G10B10A2_UNORM;

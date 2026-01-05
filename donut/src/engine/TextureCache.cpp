@@ -191,7 +191,7 @@ std::shared_ptr<IBlob> TextureCache::ReadTextureFile(const std::filesystem::path
     return fileData;
 }
 
-std::shared_ptr<TextureData> TextureCache::CreateTextureData()
+std::shared_ptr<TextureData> TextureCache::CreateTextureData() const
 {
     return std::make_shared<TextureData>();
 }
@@ -338,391 +338,6 @@ bool TextureCache::FillTextureData(
         }
     }
 
-    return true;
-}
-
-bool TextureCache::hackLoadEXRFromFile(
-    char** outputData,
-    int* width, int* height,
-    std::filesystem::path textureFile) const
-{
-    std::string fileName = textureFile.string();
-
-    // Modern TinyEXR API
-    const char* err = nullptr;
-    EXRHeader   header;
-    EXRImage    image;
-    InitEXRHeader(&header);
-    InitEXRImage(&image);
-
-    // 1. Parse version
-    EXRVersion version;
-    int        ret = ParseEXRVersionFromFile(&version, fileName.c_str());
-    if (ret != TINYEXR_SUCCESS)
-    {
-        log::error("Invalid EXR version: %s", fileName.c_str());
-        return false;
-    }
-
-    // 2. Parse header
-    ret = ParseEXRHeaderFromFile(&header, &version, fileName.c_str(), &err);
-    if (ret != TINYEXR_SUCCESS)
-    {
-        if (err)
-        {
-            log::error("EXR header error: %s", err);
-        }
-        return false;
-    }
-
-    // 3. Ensure tinyexr read as FP16 according to the spec
-    for (int i = 0; i < header.num_channels; i++)
-    {
-        assert(header.requested_pixel_types[i] == TINYEXR_PIXELTYPE_HALF, 
-            "Input spec says each RGB channel is 16 bits.");
-    }
-
-    // 4. Load image data
-    ret = LoadEXRImageFromFile(&image, &header, fileName.c_str(), &err);
-    if (ret != TINYEXR_SUCCESS)
-    {
-        if (err)
-        {
-            log::error("EXR load error: %s", err);
-        }
-        return false;
-    }
-
-    // Since we only accept 1K inputs, warn users if not 1K
-    if (image.width != Width1K || image.height != Height1K) {
-        log::warning("Input %s has size (%d x %d) not exactly 1K. Will see cropped (if bigger) or empty (if smaller) region in renderer", 
-            fileName.c_str(), image.width, image.height);
-    }
-
-    // 5. Find RGB channels (assume first 3 channels are RGB)
-    int idxR = -1, idxG = -1, idxB = -1, idxA = -1;
-    for (int c = 0; c < header.num_channels; c++)
-    {
-        if (strcmp(header.channels[c].name, "R") == 0)
-            idxR = c;
-        else if (strcmp(header.channels[c].name, "G") == 0)
-            idxG = c;
-        else if (strcmp(header.channels[c].name, "B") == 0)
-            idxB = c;
-        else if (strcmp(header.channels[c].name, "A") == 0)
-            idxA = c;
-    }
-
-    // Default to first 3 channels if not found
-    assert(idxR != -1 && idxG != -1 && idxB != -1,
-        "EXR file %ls has missing (idx = -1) RGB channels: idxR = %d, idxG = %d, idxB = %d",
-        fileName.c_str(), idxR, idxG, idxB);
-
-    // 6. Convert to target format
-    const size_t inputPixelCount = static_cast<size_t>(image.width) * static_cast<size_t>(image.height);
-
-    // NEW: Check if the image is tiled
-    bool isTiled = (header.tiled != 0);
-
-    /// These are inputPixelCount-sized planar data for each channel; tinyexr use uint16_t = unsigned short for FP16
-    uint16_t* r = nullptr;
-    uint16_t* g = nullptr;
-    uint16_t* b = nullptr;
-    uint16_t* a = nullptr;
-    std::vector<uint16_t> r_buf, g_buf, b_buf, a_buf;
-
-    if (isTiled)
-    {
-        // Handle tiled EXR - reconstruct image from tiles
-        log::info("Loading tiled EXR: %dx%d with %d tiles", image.width, image.height, image.num_tiles);
-
-        // Allocate buffers for reconstructed image
-        r_buf.resize(inputPixelCount, 0);
-        g_buf.resize(inputPixelCount, 0);
-        b_buf.resize(inputPixelCount, 0);
-        a_buf.resize(idxA >= 0 ? inputPixelCount : 0, 1);
-
-        // Get tile channel data then copy to per-channel planar data.
-        for (int tile_idx = 0; tile_idx < image.num_tiles; tile_idx++)
-        {
-            const EXRTile& tile = image.tiles[tile_idx];
-
-            uint16_t* tile_r = idxR != -1 ? reinterpret_cast<uint16_t*>(tile.images[idxR]) : nullptr;
-            uint16_t* tile_g = idxG != -1 ? reinterpret_cast<uint16_t*>(tile.images[idxG]) : nullptr;
-            uint16_t* tile_b = idxB != -1 ? reinterpret_cast<uint16_t*>(tile.images[idxB]) : nullptr;
-            uint16_t* tile_a = idxA >= 0 ? reinterpret_cast<uint16_t*>(tile.images[idxA]) : nullptr;
-            assert(tile_r != nullptr && tile_g != nullptr && tile_b != nullptr,
-                "Tiled EXR file %ls has null channel pointers when converting to uint16_t: r = %p, g = %p, b = %p",
-                fileName.c_str(), tile_r, tile_g, tile_b);
-
-            /// This works like GPU thread id.
-            /// First we locate the starting index of the tile (like thread block) from offset_x and offset_y (like tb.id)
-            /// Next we copy this width x height tile.
-            /// Also note that tile.width and tile.height represent effective data-window size.
-            /// E.g. 100 x 100 for the corner cell (last one), while it still malloc a same 128x128 memory.
-            size_t start_y = tile.offset_y * header.tile_size_y;
-            size_t start_x = tile.offset_x * header.tile_size_x;
-            for (size_t y = 0; y < tile.height; y++) {
-                for (size_t x = 0; x < tile.width; x++) {
-                    // index current pixel in tile: use tile_size_x instead of width, see above.
-                    size_t tid = y * header.tile_size_x + x;
-                    // index current pixel in global image-size memory
-                    size_t gid = (start_y + y) * image.width + (start_x + x);
-                    r_buf[gid] = tile_r[tid];
-                    g_buf[gid] = tile_g[tid];
-                    b_buf[gid] = tile_b[tid];
-                    if (tile_a)
-                        a_buf[gid] = tile_a[tid];
-                }
-            }
-        }
-
-        // DEBUG CHECK: non-negative RGB fp16 maintains order after cast as uint16_t
-        auto checkMinMax = [](std::vector<uint16_t> vec) -> std::pair<float, float> {
-            auto minmax = std::minmax_element(vec.begin(), vec.end());
-            tinyexr::FP16 fmin{ *minmax.first }, fmax{ *minmax.second };
-            return std::make_pair(tinyexr::half_to_float(fmin).f, tinyexr::half_to_float(fmax).f);
-            };
-        //auto rMinMax = checkMinMax(r_buf);
-        //auto gMinMax = checkMinMax(g_buf);
-        //auto bMinMax = checkMinMax(b_buf);
-
-        // Set pointers to the reconstructed buffers
-        r = r_buf.data();
-        g = g_buf.data();
-        b = b_buf.data();
-        a = (idxA >= 0) ? a_buf.data() : nullptr;
-    }
-    else
-    {
-        // Typical scanline mode
-        r = idxR != -1 ? reinterpret_cast<uint16_t*>(image.images[idxR]) : nullptr;
-        g = idxG != -1 ? reinterpret_cast<uint16_t*>(image.images[idxG]) : nullptr;
-        b = idxB != -1 ? reinterpret_cast<uint16_t*>(image.images[idxB]) : nullptr;
-        a = idxA >= 0 ? reinterpret_cast<uint16_t*>(image.images[idxA]) : nullptr;
-    }
-
-    // prepare FP16 1.0f constant
-    tinyexr::FP32 fp32_ONE; fp32_ONE.f = 1.0f;
-    const uint16_t      fp16_ONE = tinyexr::float_to_half_full(fp32_ONE).u;
-
-    // first malloc byte array to fixed 1K size: RGBA16_Float is 4 channels x 2 bytes
-    const size_t bytesPerPixel = 4 * 2;
-    char* finalCharData = static_cast<char*>(malloc(PixelCount1K * bytesPerPixel));
-    if (!finalCharData)
-    {
-        log::error("Failed to allocate memory for EXR texture data.");
-        return false;
-    }
-
-    // store texture； Can directly use FP16
-    uint16_t* fp16Data = reinterpret_cast<uint16_t*>(finalCharData);
-    uint8_t*  u8Data = reinterpret_cast<uint8_t*>(finalCharData);
-    assert(finalCharData != nullptr && fp16Data != nullptr,
-        L"Failed to reinterpret_cast for EXR texture.");
-
-    size_t idxSrc, idxDst;
-    // used for converting to BGRA8_UNORM
-    auto convertToU8 = [](uint16_t value) -> uint8_t {
-        tinyexr::FP16 half; half.u = value;
-        float fHDR = tinyexr::half_to_float(half).f;
-        // toneMap to 0.0-1.0
-        float fLDR = fHDR / (1.0f + fHDR);
-
-        return static_cast<uint8_t>(fLDR * 256.f);
-        };
-    
-    for (size_t i = 0; i < std::min((size_t)image.height, Height1K); ++i)
-    {
-        for (size_t j = 0; j < std::min((size_t)image.width, Width1K); ++j)
-        {
-            idxSrc = i * image.width + j;
-            idxDst = i * Width1K + j;
-
-            // store directly to uint16_t*
-            fp16Data[4 * idxDst + 0] = r[idxSrc];
-            fp16Data[4 * idxDst + 1] = g[idxSrc];
-            fp16Data[4 * idxDst + 2] = b[idxSrc];
-            fp16Data[4 * idxDst + 3] = a ? a[idxSrc] : fp16_ONE;
-        }
-    }
-
-    // write output in the end
-    *outputData = finalCharData;
-    *width = Width1K;
-    *height = Height1K;
-    return true;
-}
-
-bool TextureCache::hackLoadJitterFromFile(
-    char** outputData,
-    int* width, int* height,
-    std::filesystem::path textureFile,
-    bool isMV) const
-{
-#ifndef DONUT_WITH_TINYEXR
-    log::error("hackFillTextureData requires DONUT_WITH_TINYEXR");
-    return false;
-#endif
-
-    // both RG16_FLOAT motion vectors or D24S8 depth are 4 bytes per pixel
-	const size_t bytesPerPixel = 4;
-
-    // Initialize EXR structures
-    EXRVersion version;
-    EXRHeader  header;
-    EXRImage   image;
-    InitEXRHeader(&header);
-    InitEXRImage(&image);
-    const char* err = nullptr;
-
-    // Parse EXR version
-    std::string fileName = textureFile.string();
-    int         ret = ParseEXRVersionFromFile(&version, fileName.c_str());
-    if (ret != TINYEXR_SUCCESS)
-    {
-        log::error("Invalid EXR version: %s", fileName.c_str());
-        return false;
-    }
-
-    // Parse EXR header
-    ret = ParseEXRHeaderFromFile(&header, &version, fileName.c_str(), &err);
-    if (ret != TINYEXR_SUCCESS)
-    {
-        if (err)
-        {
-            log::error("EXR header error: %s", err);
-        }
-        return false;
-    }
-
-    // Ensure tinyexr read as FP16 according to the spec
-    for (int i = 0; i < header.num_channels; i++)
-    {
-        assert(header.requested_pixel_types[i] == TINYEXR_PIXELTYPE_HALF, "Input spec says each RGB channel is 16 bits.");
-    }
-
-    // Load EXR image
-    ret = LoadEXRImageFromFile(&image, &header, fileName.c_str(), &err);
-    if (ret != TINYEXR_SUCCESS)
-    {
-        if (err)
-        {
-            log::error("EXR load error: %s", err);
-        }
-        return false;
-    }
-
-    // Find channel indices (R=motionX, G=motionY, B=depth)
-    int idxR = -1, idxG = -1, idxB = -1;
-    for (int c = 0; c < header.num_channels; c++)
-    {
-        if (strcmp(header.channels[c].name, "R") == 0)
-            idxR = c;
-        else if (strcmp(header.channels[c].name, "G") == 0)
-            idxG = c;
-        else if (strcmp(header.channels[c].name, "B") == 0)
-            idxB = c;
-    }
-
-    // Validate required channels
-    if (isMV && (idxR == -1 || idxG == -1))
-    {
-        log::error("Motion vectors require R and G channels in %ls", textureFile.c_str());
-        return false;
-    }
-    if (!isMV && idxB == -1)
-    {
-        log::error("Depth requires B channel in %ls", textureFile.c_str());
-        return false;
-    }
-
-    // Get channel pointers; tinyexr use uint16_t = unsigned short for FP16
-    uint16_t* r = idxR != -1 ? reinterpret_cast<uint16_t*>(image.images[idxR]) : nullptr;
-    uint16_t* g = idxG != -1 ? reinterpret_cast<uint16_t*>(image.images[idxG]) : nullptr;
-    uint16_t* b = idxB != -1 ? reinterpret_cast<uint16_t*>(image.images[idxB]) : nullptr;
-    assert(r != nullptr && g != nullptr && b != nullptr,
-        L"EXR file %ls has null channel pointers when converting to uint16_t: r = %p, g = %p, b = %p",
-        fileName.c_str(), r, g, b);
-
-    /// Input is usually 1k. 
-    /// Output size is always 1k since now we only support 1k render resolution (thus 1K texture needed).
-    const size_t imgWidth = static_cast<size_t>(image.width);
-    const size_t imgHeight = static_cast<size_t>(image.height);
-    //assert(imgWidth == Width1K && imgHeight == Height1K, L"Jitter EXR input must be 1k resolution.");
-        // Since we only accept 1K inputs, warn users if not 1K
-    if (image.width != Width1K || image.height != Height1K) {
-        log::warning("Input MV %s has size (%d x %d) not exactly 1K. This could lead to ghosting in the FG frames.",
-            fileName.c_str(), image.width, image.height);
-    }
-    
-    // Allocate raw bytes array first, then reinterpret_cast to FP16 or FP32
-    char* charData = static_cast<char*>(malloc(PixelCount1K * bytesPerPixel));
-    if (!charData)
-    {
-        log::error("Memory allocation failed for %ls", textureFile.c_str());
-        return false;
-    }
-
-    /// NOTE: jitter data is 1k fixed
-    size_t idxSrc, idxDst;
-    if (isMV)
-    {
-        uint16_t* fp16Data = reinterpret_cast<uint16_t*>(charData);
-        // donut has mvec in pixel space
-        const float ratioX = static_cast<float>(imgWidth)  * 0.5f;
-        const float ratioY = static_cast<float>(imgHeight) * 0.5f;
-        auto scaleMV = [](uint16_t value, float ratio) -> uint16_t
-            {
-                tinyexr::FP16 half; half.u = value;
-                tinyexr::FP32 flt = half_to_float(half);
-                flt.f *= ratio;
-                return float_to_half_full(flt).u;
-            };
-        for (int y = 0; y < std::min(imgHeight, Height1K); y++)
-        {
-            for (int x = 0; x < std::min(imgWidth, Width1K); x++)
-            {
-                idxSrc = y * imgWidth + x;
-                idxDst = (y * Width1K + x) * 2;  // each mv stored as 2 fp16
-
-                // no interpolation needed
-                fp16Data[idxDst]     = scaleMV(r[idxSrc], -ratioX);  // mv.X
-                fp16Data[idxDst + 1] = scaleMV(g[idxSrc], +ratioY);  // mv.Y
-            }
-        } // end iterating the image
-    }
-    else {
-        /// VERY IMPORTANT NOTE:
-        /// http://gamedev.net/forums/topic/632751-dxgi_format-codes-and-endianness/4989986/
-        /// "For any DXGI format, the byte order is the order of the components in the format name. 
-        /// So for R8G8B8A8, R should be the first (lowest) byte and A should be the last (highest) byte."
-        uint32_t* u32Data = reinterpret_cast<uint32_t*>(charData);
-        for (int y = 0; y < imgHeight; y++)
-        {
-            for (int x = 0; x < imgWidth; x++)
-            {
-
-                idxSrc = y * imgWidth + x;
-                idxDst = y * Width1K + x;  // each depth stored as a D24S8-encoded bits
-
-                // Key: convert FP16 to D24S8 format, where LS 8 bits are stencil set to 0
-                // Extract 24 depth bits
-                tinyexr::FP16 h; h.u = b[idxSrc];
-                float depthValue = half_to_float(h).f;
-				assert(depthValue >= 0.0f && depthValue <= 1.0f);
-                // Convert float to 24-bit integer depth
-                const uint32_t u24MAX = (1 << 24) - 1;
-                uint32_t depth24 = static_cast<uint32_t>(depthValue * u24MAX);
-                u32Data[idxDst] = depth24; // upper 8 bits automatically 0
-            }
-        } // end iterating the image
-    }
-
-    // write output in the end
-    *outputData = charData;
-    *width = image.width;
-    *height = image.height;
     return true;
 }
 
@@ -913,86 +528,6 @@ std::shared_ptr<LoadedTexture> TextureCache::LoadTextureFromFile(
     return texture;
 }
 
-std::shared_ptr<TextureData> TextureCache::hackLoadTextureFromFile(
-    const std::filesystem::path& path,
-    HackDataType dtype)
-{
-    std::shared_ptr<TextureData> texture = CreateTextureData();
-    std::string pathStr = path.generic_string();
-    texture->path = pathStr;
-
-    int width = 0, height = 0;
-    char* data = nullptr;
-    char const* err = nullptr;
-    int channels = 4;
-    // LDR, HDR, MV, Depth are BGRA8_UNORM, RGBA16_FLOAT, RG16_FLOAT, D24S8 respectively.
-    uint32_t bytesPerPixel = dtype == HackDataType::COLOR_HDR ? channels * 2 : channels;
-    switch (dtype)
-    {
-    case HackDataType::COLOR_HDR:
-    {
-        if (!hackLoadEXRFromFile(&data, &width, &height, pathStr)) {
-            log::error("Couldn't load EXR frame '%s'", texture->path.c_str());
-            return nullptr;
-        }
-        texture->format = nvrhi::Format::RGBA16_FLOAT;
-        texture->data = std::make_shared<Blob>(data, bytesPerPixel * width * height);
-
-        break;
-    }
-    case HackDataType::MOTION_VECTORS:
-    {
-        if (!hackLoadJitterFromFile(&data, &width, &height, pathStr, true /* isMV */)) {
-            log::error("Couldn't load EXR MV '%s'", texture->path.c_str());
-            return nullptr;
-        }
-        texture->format = nvrhi::Format::RG16_FLOAT;
-        texture->data = std::make_shared<Blob>(data, bytesPerPixel * width * height);
-
-        break;
-    }
-    case HackDataType::GBUFFER_DEPTH:
-    {
-        if (!hackLoadJitterFromFile(&data, &width, &height, pathStr, false /* isMV */)) {
-            log::error("Couldn't load EXR Depth '%s'", texture->path.c_str());
-            return nullptr;
-        }
-        texture->format = nvrhi::Format::D24S8;
-        texture->data = std::make_shared<Blob>(data, bytesPerPixel * width * height);
-
-        break;
-    }
-    default:
-        log::error("Unsupported HackDataType %d", static_cast<int>(dtype));
-
-        return nullptr;
-    }
-
-    // ownership transferred to the blob
-    data = nullptr; 
-
-    // write common attributes
-    texture->width = static_cast<uint32_t>(width);
-    texture->height = static_cast<uint32_t>(height);
-
-    texture->originalBitsPerPixel = static_cast<uint32_t>(channels) * 8;
-    texture->isRenderTarget = true;
-    texture->mipLevels = 1;
-    texture->dimension = nvrhi::TextureDimension::Texture2D;
-
-    texture->dataLayout.resize(1);
-    texture->dataLayout[0].resize(1);
-    texture->dataLayout[0][0].dataOffset = 0;
-    texture->dataLayout[0][0].rowPitch = static_cast<size_t>(width * bytesPerPixel);
-    texture->dataLayout[0][0].dataSize = static_cast<size_t>(width * height * bytesPerPixel);
-
-
-    //hackFinalizeTexture(texture, dtype);
-    ++m_TexturesLoaded;
-
-    return texture;
-}
-
 std::shared_ptr<LoadedTexture> TextureCache::LoadTextureFromFileDeferred(
     const std::filesystem::path& path,
     bool sRGB)
@@ -1141,81 +676,407 @@ std::shared_ptr<LoadedTexture> TextureCache::LoadTextureFromMemoryDeferred(
     return texture;
 }
 
-int TextureCache::TraverseFolderPath(
-    const std::filesystem::path& folderPath, 
-    std::vector<std::filesystem::path>& outPaths)
+std::shared_ptr<TextureData> TextureCache::hackLoadColorFromFile(const std::string& fileName)
 {
-    /// vfs::IFileSystem works relative to project root, i.e. "/media/whatever"
-    /// while cwd is at _build/, i.e. "../media/whatever"
-    std::filesystem::path ifsPath(folderPath.string().substr(2));
-    int count = m_fs->enumerateFiles(ifsPath, { ".exr" },
-        [&folderPath, &outPaths](std::string_view name)
-        {
-            // but still output correct relative path for tinyexr to use
-            outPaths.push_back((folderPath / name).generic_string());
-        });
+    constexpr size_t bytesPerPixel = 8; // RGBA16_Float
 
-    // Sort files to ensure proper frame order (assuming filenames contain frame numbers)
-    std::sort(outPaths.begin(), outPaths.end());
+    std::shared_ptr<TextureData> texture = CreateTextureData();
 
-    return outPaths.size();
-}
+#pragma region LoadEXR
+    // Modern TinyEXR API
+    const char* err = nullptr;
+    EXRHeader   header;
+    EXRImage    image;
+    InitEXRHeader(&header);
+    InitEXRImage(&image);
 
-void TextureCache::LoadJitterFromFileLists(
-    const std::vector<std::filesystem::path>& FilePaths, 
-    std::vector<donut::math::float2>& jitterXY,
-    const uint32_t FramesToReplayTotal,
-    const uint32_t FramesToCapture)
-{
-    // Then iterate the sorted list to keep the jitter order consistent
-    // this func is also called when reading MV and Depths, so we clear conditionally.
-    jitterXY.clear();
-    for (const auto& entry : FilePaths)
+    // 1. Parse version
+    EXRVersion version;
+    int        ret = ParseEXRVersionFromFile(&version, fileName.c_str());
+    if (ret != TINYEXR_SUCCESS)
     {
-        /// Example: NPP_beauty_2472_0000_0_-0.40563965_-0.35599041
-        /// NOTE: both XY are .8f with range in [-0.5, 0.5]
-        try
-        {
-            std::string pathStr = entry.stem().generic_string();
+        log::error("Invalid EXR version: %s", fileName.c_str());
+    }
 
-            size_t lastDelim = pathStr.find_last_of('_');
-            size_t secondLastDelim = pathStr.find_last_of('_', lastDelim - 1);
-            if (lastDelim == std::string::npos || secondLastDelim == std::string::npos)
-                donut::log::error("EXR jitter filename %ls does not have expected number of underscores.", pathStr);
-
-            // 2nd-last X, last Y
-            jitterXY.push_back(float2(
-                std::stof(pathStr.substr(secondLastDelim + 1, lastDelim - secondLastDelim - 1)),
-                std::stof(pathStr.substr(lastDelim + 1))
-            ));
-        }
-        catch (const std::exception& e)
+    // 2. Parse header
+    ret = ParseEXRHeaderFromFile(&header, &version, fileName.c_str(), &err);
+    if (ret != TINYEXR_SUCCESS)
+    {
+        if (err)
         {
-            donut::log::error("%s", e.what());
+            log::error("EXR header error: %s", err);
         }
     }
 
-    const size_t nFiles = jitterXY.size();
-    /// But make sure we at least FramesToReplayTotal = 19 entries.
-    /// This will happen ONLY IF we have < 19 input files.
-    /// 
-    /// First make the middle part (frames to be captured) to
-    if (nFiles < FramesToReplayTotal)
+    // 3. Ensure tinyexr read as FP16 according to the spec
+    for (int i = 0; i < header.num_channels; i++)
     {
-        size_t index = 0;
-        while (jitterXY.size() < FramesToCapture) {
-            jitterXY.push_back(jitterXY[index]);
-			index = (index + 1) % nFiles;
+        assert(header.requested_pixel_types[i] == TINYEXR_PIXELTYPE_HALF,
+            "Input spec says each RGB channel is 16 bits.");
+    }
+
+    // 4. Load image data
+    ret = LoadEXRImageFromFile(&image, &header, fileName.c_str(), &err);
+    if (ret != TINYEXR_SUCCESS)
+    {
+        if (err)
+        {
+            log::error("EXR load error: %s", err);
         }
-        // then make 15 to 18
-        auto safetyJitter = jitterXY.back();
-        // preprend last 3 entries as warmup frames
-        jitterXY.insert(jitterXY.begin(), jitterXY.end() - 3, jitterXY.end());
-        // append first entries as safety frame
-        jitterXY.push_back(safetyJitter);
-	}
-	assert(jitterXY.size() >= FramesToReplayTotal);
-    return;
+    }
+
+    // 5. Find RGB channels (assume first 3 channels are RGB)
+    int idxR = -1, idxG = -1, idxB = -1, idxA = -1;
+    for (int c = 0; c < header.num_channels; c++)
+    {
+        if (strcmp(header.channels[c].name, "R") == 0)
+            idxR = c;
+        else if (strcmp(header.channels[c].name, "G") == 0)
+            idxG = c;
+        else if (strcmp(header.channels[c].name, "B") == 0)
+            idxB = c;
+        else if (strcmp(header.channels[c].name, "A") == 0)
+            idxA = c;
+    }
+
+    // Default to first 3 channels if not found
+    assert(idxR != -1 && idxG != -1 && idxB != -1,
+        "EXR file %ls has missing (idx = -1) RGB channels: idxR = %d, idxG = %d, idxB = %d",
+        fileName.c_str(), idxR, idxG, idxB);
+
+    // 6. Convert to target format
+    const size_t inputPixelCount = static_cast<size_t>(image.width) * static_cast<size_t>(image.height);
+
+    // NEW: Check if the image is tiled
+    bool isTiled = (header.tiled != 0);
+
+    /// These are inputPixelCount-sized planar data for each channel; tinyexr use uint16_t = unsigned short for FP16
+    uint16_t* r = nullptr;
+    uint16_t* g = nullptr;
+    uint16_t* b = nullptr;
+    uint16_t* a = nullptr;
+    std::vector<uint16_t> r_buf, g_buf, b_buf, a_buf;
+
+    if (isTiled)
+    {
+        // Handle tiled EXR - reconstruct image from tiles
+        log::info("Loading tiled EXR: %dx%d with %d tiles", image.width, image.height, image.num_tiles);
+
+        // Allocate buffers for reconstructed image
+        r_buf.resize(inputPixelCount, 0);
+        g_buf.resize(inputPixelCount, 0);
+        b_buf.resize(inputPixelCount, 0);
+        a_buf.resize(idxA >= 0 ? inputPixelCount : 0, 1);
+
+        // Get tile channel data then copy to per-channel planar data.
+        for (int tile_idx = 0; tile_idx < image.num_tiles; tile_idx++)
+        {
+            const EXRTile& tile = image.tiles[tile_idx];
+
+            uint16_t* tile_r = idxR != -1 ? reinterpret_cast<uint16_t*>(tile.images[idxR]) : nullptr;
+            uint16_t* tile_g = idxG != -1 ? reinterpret_cast<uint16_t*>(tile.images[idxG]) : nullptr;
+            uint16_t* tile_b = idxB != -1 ? reinterpret_cast<uint16_t*>(tile.images[idxB]) : nullptr;
+            uint16_t* tile_a = idxA >= 0 ? reinterpret_cast<uint16_t*>(tile.images[idxA]) : nullptr;
+            assert(tile_r != nullptr && tile_g != nullptr && tile_b != nullptr,
+                "Tiled EXR file %ls has null channel pointers when converting to uint16_t: r = %p, g = %p, b = %p",
+                fileName.c_str(), tile_r, tile_g, tile_b);
+
+            /// This works like GPU thread id.
+            /// First we locate the starting index of the tile (like thread block) from offset_x and offset_y (like tb.id)
+            /// Next we copy this width x height tile.
+            /// Also note that tile.width and tile.height represent effective data-window size.
+            /// E.g. 100 x 100 for the corner cell (last one), while it still malloc a same 128x128 memory.
+            size_t start_y = tile.offset_y * header.tile_size_y;
+            size_t start_x = tile.offset_x * header.tile_size_x;
+            for (size_t y = 0; y < tile.height; y++) {
+                for (size_t x = 0; x < tile.width; x++) {
+                    // index current pixel in tile: use tile_size_x instead of width, see above.
+                    size_t tid = y * header.tile_size_x + x;
+                    // index current pixel in global image-size memory
+                    size_t gid = (start_y + y) * image.width + (start_x + x);
+                    r_buf[gid] = tile_r[tid];
+                    g_buf[gid] = tile_g[tid];
+                    b_buf[gid] = tile_b[tid];
+                    if (tile_a)
+                        a_buf[gid] = tile_a[tid];
+                }
+            }
+        }
+
+        // DEBUG CHECK: non-negative RGB fp16 maintains order after cast as uint16_t
+        auto checkMinMax = [](std::vector<uint16_t> vec) -> std::pair<float, float> {
+            auto minmax = std::minmax_element(vec.begin(), vec.end());
+            tinyexr::FP16 fmin{ *minmax.first }, fmax{ *minmax.second };
+            return std::make_pair(tinyexr::half_to_float(fmin).f, tinyexr::half_to_float(fmax).f);
+            };
+        //auto rMinMax = checkMinMax(r_buf);
+        //auto gMinMax = checkMinMax(g_buf);
+        //auto bMinMax = checkMinMax(b_buf);
+
+        // Set pointers to the reconstructed buffers
+        r = r_buf.data();
+        g = g_buf.data();
+        b = b_buf.data();
+        a = (idxA >= 0) ? a_buf.data() : nullptr;
+    }
+    else
+    {
+        // Typical scanline mode
+        r = idxR != -1 ? reinterpret_cast<uint16_t*>(image.images[idxR]) : nullptr;
+        g = idxG != -1 ? reinterpret_cast<uint16_t*>(image.images[idxG]) : nullptr;
+        b = idxB != -1 ? reinterpret_cast<uint16_t*>(image.images[idxB]) : nullptr;
+        a = idxA >= 0 ? reinterpret_cast<uint16_t*>(image.images[idxA]) : nullptr;
+    }
+
+    // prepare FP16 1.0f constant
+    tinyexr::FP32 fp32_ONE = { .f = 1.0f };
+    const uint16_t fp16_ONE = tinyexr::float_to_half_full(fp32_ONE).u;
+
+    // first malloc byte array to fixed 1K size: RGBA16_Float is 4 channels x 2 bytes
+    char* finalCharData = static_cast<char*>(malloc(image.width * image.height * bytesPerPixel));
+    if (!finalCharData)
+    {
+        log::error("Failed to allocate memory for EXR texture data.");
+    }
+
+    // store texture； Can directly use FP16
+    uint16_t* fp16Data = reinterpret_cast<uint16_t*>(finalCharData);
+    assert(finalCharData != nullptr && fp16Data != nullptr,
+        L"Failed to reinterpret_cast for EXR texture.");
+
+    size_t idxSrc, idxDst;
+    // used for converting to BGRA8_UNORM
+    auto convertToU8 = [](uint16_t value) -> uint8_t {
+        tinyexr::FP16 half; half.u = value;
+        float fHDR = tinyexr::half_to_float(half).f;
+        // toneMap to 0.0-1.0
+        float fLDR = fHDR / (1.0f + fHDR);
+
+        return static_cast<uint8_t>(fLDR * 256.f);
+        };
+
+    for (size_t i = 0; i < image.height; ++i)
+    {
+        for (size_t j = 0; j < image.width; ++j)
+        {
+            idxSrc = i * image.width + j;
+            idxDst = 4 * idxSrc;
+
+            // store directly to uint16_t*
+            fp16Data[idxDst + 0] = r[idxSrc];
+            fp16Data[idxDst + 1] = g[idxSrc];
+            fp16Data[idxDst + 2] = b[idxSrc];
+            fp16Data[idxDst + 3] = a ? a[idxSrc] : fp16_ONE;
+        }
+    }
+
+#pragma endregion
+
+#pragma region WriteAttr
+    texture->path = fileName;
+    texture->format = nvrhi::Format::RGBA16_FLOAT;
+    texture->width = static_cast<uint32_t>(image.width);
+    texture->height = static_cast<uint32_t>(image.height);
+    // RGBA16_Float
+    texture->originalBitsPerPixel = bytesPerPixel * 8;
+    texture->isRenderTarget = true;
+    texture->mipLevels = 1;
+    texture->dimension = nvrhi::TextureDimension::Texture2D;
+
+    texture->dataLayout.resize(1);
+    texture->dataLayout[0].resize(1);
+    texture->dataLayout[0][0].dataOffset = 0;
+    texture->dataLayout[0][0].rowPitch = static_cast<size_t>(texture->width * bytesPerPixel);
+    texture->dataLayout[0][0].dataSize = static_cast<size_t>(texture->width * texture->height * bytesPerPixel);
+#pragma endregion
+
+    texture->data = std::make_shared<Blob>(finalCharData, bytesPerPixel * image.width * image.height);
+    ++m_TexturesLoaded;
+    return texture;
+}
+
+TextureCache::PairMVD TextureCache::hackLoadMVDFromFile(const std::string& fileName)
+{
+    constexpr uint32_t u24MAX = (1 << 24) - 1;
+    // both RG16_FLOAT motion vectors or D24S8 depth are 4 bytes per pixel
+    constexpr size_t bytesPerPixel = 4;
+
+    auto textureMV = CreateTextureData();
+    auto textureDepth = CreateTextureData();
+
+#pragma region LoadEXR
+    // Initialize EXR structures
+    EXRVersion version;
+    EXRHeader  header;
+    EXRImage   image;
+    InitEXRHeader(&header);
+    InitEXRImage(&image);
+    const char* err = nullptr;
+
+    // Parse EXR version
+    int ret = ParseEXRVersionFromFile(&version, fileName.c_str());
+    if (ret != TINYEXR_SUCCESS)
+    {
+        log::error("Invalid EXR version: %s", fileName.c_str());
+    }
+
+    // Parse EXR header
+    ret = ParseEXRHeaderFromFile(&header, &version, fileName.c_str(), &err);
+    if (ret != TINYEXR_SUCCESS)
+    {
+        if (err)
+        {
+            log::error("EXR header error: %s", err);
+        }
+    }
+
+    // Ensure tinyexr read as FP16 according to the spec
+    for (int i = 0; i < header.num_channels; i++)
+    {
+        assert(header.requested_pixel_types[i] == TINYEXR_PIXELTYPE_HALF, "Input spec says each RGB channel is 16 bits.");
+    }
+
+    // Load EXR image
+    ret = LoadEXRImageFromFile(&image, &header, fileName.c_str(), &err);
+    if (ret != TINYEXR_SUCCESS)
+    {
+        if (err)
+        {
+            log::error("EXR load error: %s", err);
+        }
+    }
+
+    // Find channel indices (R=motionX, G=motionY, B=depth)
+    int idxR = -1, idxG = -1, idxB = -1;
+    for (int c = 0; c < header.num_channels; c++)
+    {
+        if (strcmp(header.channels[c].name, "R") == 0)
+            idxR = c;
+        else if (strcmp(header.channels[c].name, "G") == 0)
+            idxG = c;
+        else if (strcmp(header.channels[c].name, "B") == 0)
+            idxB = c;
+    }
+
+    // Validate required channels
+    if (idxR == -1 || idxG == -1 || idxB == -1)
+        log::error("%s: requires encoded MV in RG channels and Depth in B channel", fileName.c_str());
+
+    // Get channel pointers; tinyexr use uint16_t = unsigned short for FP16
+    uint16_t* r = idxR != -1 ? reinterpret_cast<uint16_t*>(image.images[idxR]) : nullptr;
+    uint16_t* g = idxG != -1 ? reinterpret_cast<uint16_t*>(image.images[idxG]) : nullptr;
+    uint16_t* b = idxB != -1 ? reinterpret_cast<uint16_t*>(image.images[idxB]) : nullptr;
+    assert(r != nullptr && g != nullptr && b != nullptr,
+        L"EXR file %ls has null channel pointers when converting to uint16_t: r = %p, g = %p, b = %p",
+        fileName.c_str(), r, g, b);
+
+    const size_t imgWidth = static_cast<size_t>(image.width);
+    const size_t imgHeight = static_cast<size_t>(image.height);
+    // donut has mvec in pixel space
+    const float ratioX = static_cast<float>(imgWidth) * 0.5f;
+    const float ratioY = static_cast<float>(imgHeight) * 0.5f;
+    auto scaleMV = [](uint16_t value, float ratio) -> uint16_t
+        {
+            tinyexr::FP16 half; half.u = value;
+            tinyexr::FP32 flt = half_to_float(half);
+            flt.f *= ratio;
+            return float_to_half_full(flt).u;
+        };
+
+    // Allocate raw bytes array first, then reinterpret_cast to FP16 or FP32
+    char* charMVData = static_cast<char*>(malloc(imgWidth * imgHeight * bytesPerPixel));
+    char* charDepthData = static_cast<char*>(malloc(imgWidth * imgHeight * bytesPerPixel));
+    if (!charMVData || !charDepthData)
+    {
+        log::error("Memory allocation failed for %ls", fileName.c_str());
+    }
+
+    uint32_t idxSrc, idxMV, idxDepth;
+    // Read MV and Depth in one pass
+    uint16_t* mvData = reinterpret_cast<uint16_t*>(charMVData);
+    uint32_t* depthData = reinterpret_cast<uint32_t*>(charDepthData);
+    for (int y = 0; y < imgHeight; y++)
+    {
+        for (int x = 0; x < imgWidth; x++)
+        {
+            idxSrc = y * imgWidth + x;
+            idxMV = idxSrc * 2;  // each mv stored as 2 fp16
+            idxDepth = idxSrc;   // each depth stored as a D24S8-encoded bits
+
+            // no interpolation needed
+            mvData[idxMV] = scaleMV(r[idxSrc], -ratioX);  // mv.X
+            mvData[idxMV + 1] = scaleMV(g[idxSrc], +ratioY);  // mv.Y
+
+            tinyexr::FP16 hDepth = { .u = b[idxSrc] };
+            float depthValue = half_to_float(hDepth).f;
+            // convert to 24-bit unorm, upper 8 bits automatically 0
+            depthData[idxDepth] = static_cast<uint32_t>(depthValue * u24MAX);
+        }
+    } // end iterating the image
+#pragma endregion
+
+#pragma region WriteAttr
+    /* MV */
+    textureMV->path = fileName;
+    textureMV->format = nvrhi::Format::RG16_FLOAT;
+    textureMV->width = static_cast<uint32_t>(image.width);
+    textureMV->height = static_cast<uint32_t>(image.height);
+    textureMV->originalBitsPerPixel = bytesPerPixel * 8;
+    textureMV->isRenderTarget = true;
+    textureMV->mipLevels = 1;
+    textureMV->dimension = nvrhi::TextureDimension::Texture2D;
+
+    textureMV->dataLayout.resize(1);
+    textureMV->dataLayout[0].resize(1);
+    textureMV->dataLayout[0][0].dataOffset = 0;
+    textureMV->dataLayout[0][0].rowPitch = static_cast<size_t>(textureMV->width * bytesPerPixel);
+    textureMV->dataLayout[0][0].dataSize = static_cast<size_t>(textureMV->width * textureMV->height * bytesPerPixel);
+
+    /* Depth */
+    textureDepth->path = fileName;
+    textureDepth->format = nvrhi::Format::D24S8;
+    textureDepth->width = static_cast<uint32_t>(image.width);
+    textureDepth->height = static_cast<uint32_t>(image.height);
+    textureDepth->originalBitsPerPixel = bytesPerPixel * 8;
+    textureDepth->isRenderTarget = true;
+    textureDepth->mipLevels = 1;
+    textureDepth->dimension = nvrhi::TextureDimension::Texture2D;
+
+    textureDepth->dataLayout.resize(1);
+    textureDepth->dataLayout[0].resize(1);
+    textureDepth->dataLayout[0][0].dataOffset = 0;
+    textureDepth->dataLayout[0][0].rowPitch = static_cast<size_t>(textureDepth->width * bytesPerPixel);
+    textureDepth->dataLayout[0][0].dataSize = static_cast<size_t>(textureDepth->width * textureDepth->height * bytesPerPixel);
+#pragma endregion
+
+    textureMV->data = std::make_shared<Blob>(charMVData, bytesPerPixel * image.width * image.height);
+    textureDepth->data = std::make_shared<Blob>(charDepthData, bytesPerPixel * image.width * image.height);
+
+    m_TexturesLoaded += 2;
+    return std::make_pair(textureMV, textureDepth);
+}
+
+donut::math::float2 TextureCache::hackLoadJitterDataFromFilename(const std::string& fileName)
+{
+    /// Example: NPP_beauty_2472_0000_0_-0.40563965_-0.35599041
+    /// NOTE: both XY are .8f with range in [-0.5, 0.5]
+    try
+    {
+        size_t lastDelim = fileName.find_last_of('_');
+        size_t secondLastDelim = fileName.find_last_of('_', lastDelim - 1);
+        if (lastDelim == std::string::npos || secondLastDelim == std::string::npos)
+            log::error("EXR jitter filename %s does not have expected number of underscores.", fileName.c_str());
+
+        // 2nd-last X, last Y
+        return donut::math::float2(
+            std::stof(fileName.substr(secondLastDelim + 1, lastDelim - secondLastDelim - 1)),
+            std::stof(fileName.substr(lastDelim + 1))
+        );
+    }
+    catch (const std::exception& e)
+    {
+        log::error("%s", e.what());
+    }
 }
 
 std::shared_ptr<TextureData> TextureCache::GetLoadedTexture(std::filesystem::path const& path)
