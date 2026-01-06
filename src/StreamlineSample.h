@@ -288,7 +288,7 @@ private:
     bool SaveIfUniqueTexture(
         winrt::com_ptr<ID3D11Device> device,
         winrt::com_ptr<ID3D11Texture2D> texture,
-        const std::string filename);
+        const std::string& filename);
 #pragma endregion
 
 public:
@@ -393,7 +393,7 @@ public:
     constexpr static uint32_t DuplicateMaxRetry = 5;
     /**
      * @brief INTERNAL, used for DLSS-G cold start problem.
-     * See StreamlineSample() constructor where we set Present callback to see how it works
+     * See comments in DecideExportInfo() body to see how it works
      */
     constexpr static uint32_t FramesToWarmup = 3;
     constexpr static uint32_t FramesToCapture = 15;
@@ -414,10 +414,29 @@ public:
         const std::string filename;
     };
 
+    std::string hackExportFilenameSR = ""; // Set by DecideExportInfo() in beforePresent callback
+    std::string hackExportFilenameFG = ""; // Set by DecideExportInfo() in beforePresent callback
+
     /**
      * @brief Stores image by xxhash XXH64(). Used for duplication detection after capture before export.
      */
     std::unordered_map<uint64_t, FrameData> hash_bin;
+
+    /**
+     * @brief Called per frame in beforePresent callback to decide whther to capture SR and FG frame data.
+     * 
+     * By "capture", we mean:
+     * 
+     * (1) Call MapRenderTargetDataHDR() in RenderScene() to get SR frame data directly from AAResolvedColor.
+     * 
+	 * (2) Call CaptureFramePoolHDR() in afterPresent callback to get FG frame data from front-end window.
+     * 
+     * Set strings hackExportFilenameSR and hackExportFilenameFG to the final export filenames.
+	 * Their respective frameID is adjusted with different logic, see comments in the function body.
+     * 
+     * If not within the respective capture frames range, set to empty for these 2 capture functions to skip.
+     */
+    void DecideExportInfo();
 
     /**
      * Load test inputs from disk. Also, it sets hackOptions.renderResolution to the input resolution.
@@ -476,7 +495,20 @@ public:
      *  
      * We install Windows Implementation Library (wil) and use wil::shared_event to handle FrameArrived()
      */
-    void CaptureFramePoolHDR(const std::string filename);
+    void CaptureFramePoolHDR(const std::string& filename);
+
+    /**
+     * @brief Attempt 8 Amendment: Given a backend RenderTarget, map to raw data and add to hash_bin if no duplicate found.
+     *
+     * Using front-end approach CaptureFramePoolHDR() on SR export is unnecessary,
+     * as we can directly read from AAResolvedColor. Also, calling CaptureFramePoolHDR() on both SR and FG
+     * export causes timing issue and often results in several wrong frames.
+     * 
+     * @param texture Should be m_RenderTargets->AAResolvedColor, but can be used on other RGBA16_FLOAT RTs as well.
+     * @param filename 
+     * @return 
+     */
+    bool MapRenderTargetDataHDR(nvrhi::TextureHandle texture, const std::string& filename);
 
 #pragma endregion
 

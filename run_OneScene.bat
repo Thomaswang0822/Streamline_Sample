@@ -22,6 +22,8 @@ set AlignFilename=-AlignFilename
 set INPUT_ROOT=..\media\TEST_SCENE
 set OUTPUT_ROOT=%INPUT_ROOT%\screenshots
 
+set "Has_Ref=y"
+
 rem Override with command-line arguments if provided
 if not "%~1"=="" set Identifier=%~1
 if not "%~2"=="" set DisplayResolution=%~2
@@ -54,9 +56,6 @@ if %errorlevel% equ 2 (
     exit /b 0
 )
 
-rem Clear output folder first because we count outputs to confirm no missing.
-del "%OUTPUT_ROOT%\*.exr"
-
 for /L %%i in (0, 1, %END_INDEX%) do (
     echo ===== Batch Index %%i =====
     
@@ -66,6 +65,9 @@ for /L %%i in (0, 1, %END_INDEX%) do (
 
 rem Confirm total numbers first
 set /a EXPECTED_COUNT=INPUT_COUNT*2
+if defined Has_Ref (
+    set /a EXPECTED_COUNT=EXPECTED_COUNT+INPUT_COUNT
+)
 set OUTPUT_COUNT=0
 for %%x in (%OUTPUT_ROOT%\*.exr) do (
     set /a OUTPUT_COUNT+=1
