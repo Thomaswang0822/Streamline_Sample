@@ -17,9 +17,10 @@ if %errorlevel% neq 0 (
 rem Set default values first
 rem IMPORTANT NOTE: Batch script executes commands in Windows command prompt which can't recognize "/" as path separator.
 set Identifier=Script_Test
-set DisplayResolution=2
-set OUTPUT_ROOT=..\media\TEST_SCENE\screenshots
-set INPUT_ROOT=..\media\TEST_SCENE\NPP_JI
+set DisplayResolution=4
+set AlignFilename=-AlignFilename
+set INPUT_ROOT=..\media\TEST_SCENE
+set OUTPUT_ROOT=%INPUT_ROOT%\screenshots
 
 rem Override with command-line arguments if provided
 if not "%~1"=="" set Identifier=%~1
@@ -28,11 +29,12 @@ if not "%~3"=="" set INPUT_ROOT=%~3
 if not "%~4"=="" set OUTPUT_ROOT=%~4
 
 set INPUT_COUNT=0
-for %%x in (%INPUT_ROOT%\*.exr) do (
+for %%x in (%INPUT_ROOT%\NPP_JI\*.exr) do (
     set /a INPUT_COUNT+=1
 )
 rem 15 is the batch size, batch count is ceiling division
 set /a BATCH_COUNT=(%INPUT_COUNT% + 14) / 15
+set /a END_INDEX=BATCH_COUNT-1
 
 rem Let user press y/n to confirm the command and total runs.
 echo Using parameters:
@@ -41,7 +43,9 @@ echo DisplayResolution: %DisplayResolution%
 echo Input path: %INPUT_ROOT%
 echo Output path: %OUTPUT_ROOT%
 echo INPUT_COUNT: %INPUT_COUNT%, BATCH_COUNT: %BATCH_COUNT%
-echo Command to run: %EXE_PATH% -EnableHack -Identifier %Identifier% -DisplayResolution %DisplayResolution% -ParseJitter -HackPaths "%INPUT_ROOT%" -StoreOutput -BatchIndex i -OutputPath "%OUTPUT_ROOT%"
+
+set "FIXED_ARGS=-EnableHack -Identifier %Identifier% -DisplayResolution %DisplayResolution% -ParseJitter -HackPaths "%INPUT_ROOT%" -StoreOutput %AlignFilename% -OutputPath "%OUTPUT_ROOT%""
+echo Command to run: %EXE_PATH% %FIXED_ARGS% -BatchIndex [0 to %END_INDEX%] 
 echo Please confirm command and that "BATCH_COUNT * 15 >= total input frames"
 
 choice /c YN /m "Run with these parameters? Double check OUTPUT_ROOT=%OUTPUT_ROOT% is what you normally pass to last arg -OutputPath."
@@ -53,27 +57,27 @@ if %errorlevel% equ 2 (
 rem Clear output folder first because we count outputs to confirm no missing.
 del "%OUTPUT_ROOT%\*.exr"
 
-set /a END_INDEX=BATCH_COUNT-1
 for /L %%i in (0, 1, %END_INDEX%) do (
     echo ===== Batch Index %%i =====
     
     rem Execute the program
-    %EXE_PATH% -EnableHack -Identifier %Identifier% -DisplayResolution 4 -ParseJitter -HackPaths "%INPUT_ROOT%" -StoreOutput -BatchIndex %%i -OutputPath "%OUTPUT_ROOT%"
+    %EXE_PATH% %FIXED_ARGS% -BatchIndex %%i
 )
 
 rem Confirm total numbers first
+set /a EXPECTED_COUNT=INPUT_COUNT*2
 set OUTPUT_COUNT=0
 for %%x in (%OUTPUT_ROOT%\*.exr) do (
     set /a OUTPUT_COUNT+=1
 )
-if %OUTPUT_COUNT% neq %INPUT_COUNT% (
-    echo ERROR: OUTPUT_COUNT %OUTPUT_COUNT% less than expected %INPUT_COUNT%!
+if %OUTPUT_COUNT% neq %EXPECTED_COUNT% (
+    echo ERROR: OUTPUT_COUNT %OUTPUT_COUNT% less than expected %EXPECTED_COUNT%!
 )
 
 rem Then go ahead to call python duplicate check helper.
 cd ../media
 set PY_SCRIPT=check_duplicate.py
-set RUN_FOLDER=TEST_SCENE/screenshots
+set RUN_FOLDER=%OUTPUT_ROOT%
 
 echo.
 echo ===== Checking for duplicate frames in !RUN_FOLDER! =====
