@@ -17,6 +17,7 @@ def check_duplicate(path_string: str):
     
     # Traverse all files in directory
     file_count = 0
+    dup_count = 0
     for filename in os.listdir(abs_folder_path):
         filepath = os.path.join(abs_folder_path, filename)
         
@@ -34,10 +35,10 @@ def check_duplicate(path_string: str):
                 
             # Check for duplicate
             if file_hash in hash_dict:
+                dup_count += 1
                 print(f"Duplicate found!\n"
-                        f"File 1: {hash_dict[file_hash]}\n"
-                        f"File 2: {filepath}")
-                sys.exit(1)
+                    f"File 1: {hash_dict[file_hash]}\n"
+                    f"File 2: {filepath}\n")
                 
             # Store new hash
             hash_dict[file_hash] = filepath
@@ -48,11 +49,15 @@ def check_duplicate(path_string: str):
                 
         except IOError as e:
             print(f"Error reading {filepath}: {str(e)}", file=sys.stderr)
+            sys.exit(1)
         except MemoryError:
             print(f"Memory error processing {filepath} - file too large?", file=sys.stderr)
             sys.exit(1)
     
-    print(f"No duplicates found in {file_count} files")
+    if dup_count == 0:
+        print(f"No duplicates found in {file_count} files.")
+    else:
+        print(f"{dup_count} duplicates found in {file_count} files.")
     sys.exit(0)
 
 if __name__ == "__main__":

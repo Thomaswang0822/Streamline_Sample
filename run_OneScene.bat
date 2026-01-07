@@ -86,7 +86,7 @@ echo ===== Checking for duplicate frames in !RUN_FOLDER! =====
 
 call python %PY_SCRIPT% "!RUN_FOLDER!"
 if %errorlevel% neq 0 (
-    echo ERROR: Duplicates found in output_run_%%i
+    echo ERROR: Duplicates found!
     exit /b 1
 )
 

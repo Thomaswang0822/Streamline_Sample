@@ -45,3 +45,28 @@ This is confirmed by [Nvidia ProgrammingGuideDLSS_G doc](streamline\docs\Program
 > DLSS-G currently does NOT support FP16 pixel format and scRGB color space because it is too expensive in terms of compute and bandwidth cost.
 
 TODO: dive deeper and see if we can turn on DLSSG with RGBA16_FLOAT.
+
+## Bug 3: Memory Leak
+
+Found on 500 Machine only
+
+### Bevavior
+
+Observe: Across different whole-scene runs (from the batch script), we ***ALWAYS*** get 36 zero-byte export out of 120 in total.
+However, the set of zero-byte frames can be different for each run.
+
+### Cause
+
+A closer inspection tells us more. TODO: complete explanation. 
+
+NPP_beauty_2511_MaxPerformance_fg.exr
+NPP_beauty_2512_MaxPerformance.exr
+
+NPP_beauty_2531_MaxPerformance.exr
+NPP_beauty_2531_MaxPerformance_fg.exr
+
+NPP_beauty_2483_MaxPerformance_fg.exr
+NPP_beauty_2484_MaxPerformance.exr
+
+NPP_beauty_2501_MaxPerformance.exr
+NPP_beauty_2501_MaxPerformance_fg.exr
