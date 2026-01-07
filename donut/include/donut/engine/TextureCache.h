@@ -78,17 +78,6 @@ namespace donut::engine
 
     class TextureCache
     {
-    public:
-        enum class HackDataType {
-            COLOR_HDR = 0,
-            MOTION_VECTORS = 1,
-            GBUFFER_DEPTH = 2,
-        };
-        // For now, we only support 1K inputs (while allowing upscaled to 1K, 2K, or 4K).
-        static constexpr size_t Width1K = 1920;
-        static constexpr size_t Height1K = 1080;
-        static constexpr size_t PixelCount1K = Width1K * Height1K;
-
     protected:
         nvrhi::DeviceHandle m_Device;
         nvrhi::CommandListHandle m_CommandList;
@@ -121,31 +110,13 @@ namespace donut::engine
             const std::string& extension,
             const std::string& mimeType) const;
 
-        // helpers
-        /**
-         * Load RGBA16_FLOAT or BGRA8_UNORM frame captures.
-         */
-        bool hackLoadEXRFromFile(
-            char** outputData,
-            int* width, int* height,
-            std::filesystem::path textureFile) const;
-
-        /**
-         * Load RG16_FLOAT motion vectors or D24S8 depth.
-         */
-        bool hackLoadJitterFromFile(
-            char** outputData,
-            int* width, int* height,
-            std::filesystem::path textureFile,
-            bool isMV) const;
-
         void FinalizeTexture(
             std::shared_ptr<TextureData> texture,
             CommonRenderPasses* passes,
             nvrhi::ICommandList* commandList);
 
         virtual void TextureLoaded(std::shared_ptr<TextureData> texture);
-        virtual std::shared_ptr<TextureData> CreateTextureData();
+        virtual std::shared_ptr<TextureData> CreateTextureData() const;
 
     public:
         TextureCache(
@@ -164,20 +135,6 @@ namespace donut::engine
             bool sRGB,
             CommonRenderPasses* passes,
             nvrhi::ICommandList* commandList);
-
-        /**
-         * hack version of LoadTextureFromFile, but works very differently:
-         * Unlike LoadTextureFromFile, which calls FinalizeTexture to recreate data at texture->texture
-         * and clear TextureData* texture->data,
-         * this function does not create texture->texture or clear texture->data.
-         *
-         * `texture` is struct TextureData : public LoadedTexture
-         * `texture->data` is IBlob*, i.e. raw bytes
-         * `texture->texture` is TextureHandle, a member of LoadedTexture         *
-         */
-        std::shared_ptr<TextureData> hackLoadTextureFromFile(
-            const std::filesystem::path& path,
-            HackDataType dtype);
 
         // Synchronous read and decode, deferred upload and mip generation (in the ProcessRenderingThreadCommands queue).
         virtual std::shared_ptr<LoadedTexture> LoadTextureFromFileDeferred(
@@ -215,17 +172,34 @@ namespace donut::engine
             const std::string& name,
             const std::string& mimeType,
             bool sRGB);
+
+#pragma region HackLoaders
+        /**
+         * Load RGBA16_FLOAT color data from EXR file..
+         *
+         * \param fileName
+         * \return Loaded std::shared_ptr<TextureData>
+         */
+        std::shared_ptr<TextureData> hackLoadColorFromFile(const std::string& fileName);
+
+        typedef std::pair<std::shared_ptr<TextureData>, std::shared_ptr<TextureData>> PairMVD;
+        /**
+         * Load RG16_FLOAT motion vectors AND D24S8 depth.
+         *
+         * \param fileName
+         * \return A pair of std::shared_ptr<TextureData>, first is motion vectors, second is depth.
+         */
+        PairMVD hackLoadMVDFromFile(const std::string& fileName);
+
+        /**
+         * Load float2 jitter data.
+         *
+         * \param fileName
+         * \return donut::math::float2.
+         */
+        donut::math::float2 hackLoadJitterDataFromFilename(const std::string& fileName);
+#pragma endregion
         
-        int TraverseFolderPath(
-            const std::filesystem::path& folderPath,
-            std::vector<std::filesystem::path>& outPaths);
-
-        void LoadJitterFromFileLists(
-            const std::vector<std::filesystem::path>& FilePaths,
-            std::vector<donut::math::float2>& jitterXY,
-            const uint32_t FramesToReplayTotal,
-            const uint32_t FramesToCapture);
-
         // Tells if the texture has been loaded from file successfully and its data is available in the texture object.
         // After the texture is finalized and uploaded to the GPU, the data is no longer available on the CPU,
         // and this function returns false.

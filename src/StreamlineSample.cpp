@@ -74,6 +74,8 @@
 
 #include <xxhash.h>
 
+#include <unordered_set>
+
 using namespace donut;
 using namespace donut::math;
 using namespace donut::engine;
@@ -116,7 +118,7 @@ const std::unordered_map<int, donut::math::uint2> StreamlineSample::ResolutionAl
 };
 
 /// typical usage:
-/// -EnableHack -Identifier FG_TEST -Resolution 2560 1440 -ParseJitter -HackPaths "../media/TEST_SCENE/NPP_JI" -StoreOutput -BatchIndex 1 -OutputPath "../media/TEST_SCENE/screenshots"
+/// -EnableHack -DisplayResolution 2560 1440 -ParseJitter -BatchIndex 1 -HackPaths "../media/TEST_SCENE" -StoreOutput -AlignFilename -OutputPath "../media/TEST_SCENE/screenshots"
 StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, const char* const* argv)
 {
     HackOptionDef options;
@@ -132,6 +134,7 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
         });
     };
 
+    // throw if not valid
     auto ValidateArg = [&argList](size_t idx, size_t numValues, const std::string_view& option) {
         bool isValid = idx + numValues < argList.size();
         auto it = argList.begin() + idx + 1;
@@ -191,29 +194,24 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
         {
             // We require at least 1 argument
             ValidateArg(currentArg, 1, command);
+            options.hackPaths.clear();
 
             // store 2 paths: default NPP_JI, MVD_JI
             options.hackPaths.push_back(std::filesystem::path(argList[currentArg + 1]));
-            const auto nTargets = CountEXR(std::filesystem::path(options.hackPaths[0]));
 
-            auto jitterPath = options.hackPaths.front().parent_path() += "/MVD_JI";
-            assert(std::filesystem::exists(jitterPath), "Encoded MVs and Depths exr files must be stored in %s", jitterPath.c_str());
-            options.hackPaths.push_back(jitterPath);
-            const auto jitterCount = CountEXR(std::filesystem::path(options.hackPaths[1]));
+            bool isGivenBoth = currentArg + 2 < argList.size() && argList[currentArg + 2][0] != '-';
+            if (isGivenBoth) {
+                options.hackPaths.push_back(argList[currentArg + 2]);
+            }
+            else {
+                // front stores parent path
+                options.hackPaths.push_back(options.hackPaths.front().string() + MVDSubdir);
+                options.hackPaths.front() += ColorSubdir;
+            }
 
-            assert(nTargets == jitterCount,
-                "frame capture count and jitter count of (%s) (%s) should match, but got %d and %d",
-                options.hackPaths[0].c_str(), options.hackPaths[1].c_str(),
-                nTargets, gtCount, jitterCount);
-
-            // IMPORTANT: internal member frameCount and totalBatches can ONLY be set here.
-            options.frameCount = nTargets;
-            options.totalBatches = nTargets / FramesToCapture +
-                (nTargets % FramesToCapture > 0); // round up
-            assert(options.totalBatches > 0, "options.totalBatches should be at least 1");
-
-            currentArg++;
+            currentArg += isGivenBoth ? 2 : 1;
             continue;
+            // IMPORTANT: internal member frameCount and totalBatches set in PostProcess()
         }
         if (hackMode && command == "-StoreOutput")
         {
@@ -229,6 +227,12 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
             continue;
         }
 
+        if (hackMode && command == "-AlignFilename")
+        {
+            options.alignFilename = true;
+            continue;
+        }
+
         if (hackMode && command == "-OutputPath")
         {
             ValidateArg(currentArg, 1, command);
@@ -238,11 +242,86 @@ StreamlineSample::HackOptionDef StreamlineSample::parseHackOptions(int argc, con
         }
     }
 
-    if (hackMode)
-        assert(options.frameCount > 0, "hackOptions.frameCount is not set because -HackPaths <PATH> is missing or has wrong format.");
-    options.batchIndex = std::min(options.batchIndex, options.totalBatches - 1); // cap batchIndex
-
+    options.PostProcess();
     return options;
+}
+
+bool StreamlineSample::HackOptionDef::PostProcess()
+{
+    // sanity check
+    if (hackPaths.size() < 2)
+        log::error("HackPaths not given in cmdline args");
+    if (!std::filesystem::exists(hackPaths[0]) || !std::filesystem::exists(hackPaths[1]))
+        log::error("Not both of Color Path %s and MVD path %s exist", hackPaths[0].c_str(), hackPaths[1].c_str());
+
+    // If outPath not given, set to <parent of Color Path>/outputs
+    if (outPath == "") {
+        outPath = std::filesystem::path(hackPaths[0]).parent_path() / "outputs";
+    }
+
+    // Set frameCount to MVD count
+    frameCount = static_cast<size_t>(std::count_if(
+        std::filesystem::directory_iterator(hackPaths[1]),
+        std::filesystem::directory_iterator{},
+        [](const auto& entry) {return entry.path().extension() == ".exr"; }
+    ));
+    // Then set totalBatches
+    totalBatches = frameCount / FramesToCapture +
+        (frameCount % FramesToCapture > 0); // round up
+    if (totalBatches == 0)
+        log::error("Found %d .exr in %s", frameCount, hackPaths[1].c_str());
+    // And cap batchIndex
+    batchIndex = std::min(batchIndex, totalBatches - 1);
+
+    size_t colorCount = 0;  // will count later
+
+    // To check duplicate
+    size_t minID = std::numeric_limits<size_t>::max();
+    std::unordered_set<std::string> allSeenPrefix;
+
+    for (const auto& it : std::filesystem::directory_iterator(hackPaths[0]))
+    {
+        const auto& fullPath = it.path();
+        if (fullPath.extension() != ".exr")
+            continue;
+
+        colorCount++;
+
+        // construct prefix until we hit a numeric frameID token
+        std::string pathPrefix = "";
+        std::istringstream pathSS(fullPath.stem().generic_string());
+        for (std::string token; std::getline(pathSS, token, '_'); ) {
+            if (!token.empty() && std::all_of(token.begin(), token.end(), ::isdigit)) {
+                minID = std::min(minID, std::stoull(token));
+                allSeenPrefix.emplace(pathPrefix);
+                break;
+            }
+            else {
+                // not frameID yet
+                pathPrefix += token + "_";
+            }
+        } // end parsing one file
+    }
+    if (allSeenPrefix.empty())
+        log::error("%s has no .exr files", hackPaths[0].c_str());
+    else if (allSeenPrefix.size() > 1)
+        log::error("Found duplicate filename prefix when `alignFilename` is set: %s and %s",
+            allSeenPrefix.begin()->c_str(),
+            std::next(allSeenPrefix.begin())->c_str());
+    else if (alignFilename || identifier == "") {
+        // overwrite identifier even if user has set it; NOTE the hashkey has an extra '_'
+        identifier = allSeenPrefix.begin()->data();
+        identifier.pop_back();
+
+        baseFrameIndex = minID;
+    }
+
+
+    if (frameCount != colorCount)
+        log::error("%s and %s don't have equal .exr count: [%d, %d]", hackPaths[0].c_str(), hackPaths[1].c_str(), frameCount, colorCount);
+
+
+    return true;
 }
 
 void StreamlineSample::SetDLSSMode(sl::DLSSMode& upMode)
@@ -393,11 +472,23 @@ static winrt::com_ptr<T> GetDXGIInterfaceFromObject(winrt::Windows::Foundation::
     return result;
 }
 
-bool StreamlineSample::SaveIfUniqueTexture(winrt::com_ptr<ID3D11Device> device, winrt::com_ptr<ID3D11Texture2D> texture, const std::string filename)
+bool StreamlineSample::SaveIfUniqueTexture(winrt::com_ptr<ID3D11Device> device, winrt::com_ptr<ID3D11Texture2D> texture, const std::string& filename)
 {
     // Create staging texture
     D3D11_TEXTURE2D_DESC desc;
     texture->GetDesc(&desc);
+
+    /// This will happen in windowed mode, i.e. (deviceParams.startFullscreen = false)
+    /// E.g. A 2562 x 1453 window will be displayed for 2560 x 1440 display resolution.
+    if (desc.Width != hackOptions.displayResolution.x || desc.Height != hackOptions.displayResolution.y) {
+        log::warning("Captured FG frame size [%d, %d] mismatches expected display resolution [%d, %d]",
+            desc.Width, desc.Height,
+            hackOptions.displayResolution.x, hackOptions.displayResolution.y);
+        log::warning("Likely due to (1) starting in windowed mode (2) Monitor smaller than specified display resolution. Will skip FG frame capture.");
+        // To stop retrying another capture
+        return true;
+    }
+
     const int width = desc.Width;
     const int height = desc.Height;
     const size_t bytesPerPixel = 4 * 2; // RGBA16_FLOAT
@@ -443,12 +534,12 @@ bool StreamlineSample::SaveIfUniqueTexture(winrt::com_ptr<ID3D11Device> device, 
     bool uniqueHash = !hash_bin.contains(hash64);;
     if (uniqueHash) {
         // unique, save it
-        FrameData frameData = { {}, mapped.RowPitch, width, height, filename };
-        
-        // Calculate total size and copy the data
-        size_t totalSize = height * mapped.RowPitch;
-        frameData.data.resize(totalSize);
-        memcpy(frameData.data.data(), mapped.pData, totalSize);
+        uint8_t* slotStart = hackExportMemoryPoolFG.get() + hackExportSlotFG * hackExportBytesPerFrame;
+
+        // We already ensure the actually captured window size matches target display resolution.
+        std::memcpy(slotStart, mapped.pData, hackExportBytesPerFrame);
+
+        FrameData frameData = { slotStart, mapped.RowPitch, width, height, filename };
 
         hash_bin.emplace(hash64, std::move(frameData));
     }
@@ -457,8 +548,8 @@ bool StreamlineSample::SaveIfUniqueTexture(winrt::com_ptr<ID3D11Device> device, 
     {
         /// A very rare and special case, total inputs (frameCount) < 15, 
         /// e.g. 10, then the 3 + 15 + 1 frames loaded will be 
-        /// (warnup 7 8 9) (capture 0 to 9, 0 to 4), (safety 5),
-        /// we need to igore those duplications 0-4.
+        /// (warmup 7 8 9) (capture 0 to 9, 0 to 4), (safety 5),
+        /// we need to ignore those duplications 0-4.
         uniqueHash = true;
     }
     
@@ -469,7 +560,7 @@ bool StreamlineSample::SaveIfUniqueTexture(winrt::com_ptr<ID3D11Device> device, 
 }
 
 
-void StreamlineSample::CaptureFramePoolHDR(const std::string filename)
+void StreamlineSample::CaptureFramePoolHDR(const std::string& filename)
 {
     auto d3dDevice = GetDXGIInterfaceFromObject<ID3D11Device>(m_captureDevice);
     winrt::com_ptr<ID3D11DeviceContext> d3dContext;
@@ -530,6 +621,143 @@ void StreamlineSample::CaptureFramePoolHDR(const std::string filename)
     framePool.Close();
     return;
 
+}
+
+bool StreamlineSample::MapRenderTargetDataHDR(nvrhi::TextureHandle texture, const std::string& filename)
+{
+    const auto& desc = texture->getDesc();
+    if (desc.format != nvrhi::Format::RGBA16_FLOAT) {
+        log::error("MapRenderTargetDataHDR only supports RGBA16_FLOAT texture");
+	}
+    if (desc.width != hackOptions.displayResolution.x || desc.height != hackOptions.displayResolution.y) {
+        log::error("MapRenderTargetDataHDR texture size [%d, %d] mismatches expected display resolution [%d, %d]",
+            desc.width, desc.height,
+            hackOptions.displayResolution.x, hackOptions.displayResolution.y);
+	}
+
+    // Create command list and staging texture
+    nvrhi::CommandListHandle commandList = GetDevice()->createCommandList();
+    commandList->open();
+
+    nvrhi::StagingTextureHandle stagingTexture = GetDevice()->createStagingTexture(desc, nvrhi::CpuAccessMode::Read);
+    commandList->copyTexture(stagingTexture, nvrhi::TextureSlice(), texture, nvrhi::TextureSlice());
+
+    commandList->close();
+    GetDevice()->executeCommandList(commandList);
+
+    // Map staging texture - get raw data pointer
+    size_t rowPitchBytes = 0;
+    const void* rawData = GetDevice()->mapStagingTexture(
+        stagingTexture, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitchBytes);
+
+    uint64_t hash64 = XXH64(rawData, desc.width * desc.height * 8 /* bytesPerPixel */, 0 /* use consistent seed */);
+    // process and return accordingly
+    bool uniqueHash = !hash_bin.contains(hash64);;
+    if (uniqueHash) {
+        uint8_t* slotStart = hackExportMemoryPoolSR.get() + hackExportSlotSR * hackExportBytesPerFrame;
+        std::memcpy(slotStart, rawData, hackExportBytesPerFrame);
+
+        FrameData frameData = { slotStart, rowPitchBytes, desc.width, desc.height, filename};
+
+        hash_bin.emplace(hash64, std::move(frameData));
+    }
+
+    // in the end
+    GetDevice()->unmapStagingTexture(stagingTexture);
+    stagingTexture = nullptr;
+    return uniqueHash;
+}
+
+void StreamlineSample::DecideExportInfo()
+{
+    if (!(hackOptions.enableHack && hackOptions.storeOutput))
+        return;
+
+
+	auto frameIdx = GetFrameIndex();
+
+    /// FramesToWarmup (constexpr 3) is to solve the DLSS-G cold start problem.
+    /// Without it, we observed the following {frameIdx; SR data from which frame; FG data from which frame;}:
+    /// {0; BLACK (window not opened yet); Frame 0;}
+    /// {1; Frame 0; Frame 1;}
+    /// {2; Frame 1; Frame 1 (This is weird);}
+    /// {3; Frame 2; Frame 2.5 (correct);} 
+    /// And stays correct afterwards.
+    /// 
+    /// The solution is to let DLSS-G warmup for 3 frames before we start capturing.
+    /// Previous 3 frames are loaded. See LoadHackTextures() on how exactly "previous 3" is defined according to batchIndex.
+    /// 
+    /// After adjusting raw frameIdx with 3 (let's call it t, t = frameIdx - 3), 
+    /// we further need to map it to the actual frameID matching the data being captured.
+    /// SR and FG frameID have different mapping logic:
+    /// 
+    /// SR logic is easy, since we directly read from internal RT AAResolvedColor.
+    /// When calling SR capture function at frame t in RenderScene(), SR result of frame t+1 is captured.
+    /// 
+    /// FG logic is more tricky, since we have to use front-end approach to capture what's being Present().
+    /// When calling FG capture function at frame t in afterPresent callback, FG result of frame t-1 is captured, 
+    /// 
+    /// Putting them together and thinking reversely, for exported data of frame 0 to 14 (FramesToCapture = 15),
+	/// SR data come from frameIdx 2 to 16 (t = -1 to 13);
+    /// FG data come from frameIdx 4 to 18 (t = +1 to 15);
+
+    /// We use immediately evaluated lambda to enable early return
+
+    /* SR */
+    hackExportFilenameSR = [&]() -> std::string {
+        constexpr uint32_t RawFrameStart = FramesToWarmup - 1;
+        if (frameIdx >= RawFrameStart && frameIdx < RawFrameStart + FramesToCapture) // within range
+        {
+            uint32_t fid = frameIdx - RawFrameStart // batch-local matching frameID, 0 to 14
+                + hackOptions.batchIndex * FramesToCapture; // global matching frameID, 0 to 59
+
+            // if frameCount = 50, frame 50-59 does not exist
+            if (fid >= hackOptions.frameCount)
+                return "";
+
+            if (hackOptions.alignFilename)
+                fid += hackOptions.baseFrameIndex;
+
+            // align frameID to 4 digits, e.g. "3" to "0003" for cleaner folder view.
+            std::string frameIdStr = std::string(4 /* format length */ - std::to_string(fid).length(), '0')
+                + std::to_string(fid) + "_";
+
+            return std::filesystem::absolute(hackOptions.outPath).string() + "/" +
+                hackOptions.identifier + "_" + frameIdStr + hackOptions.modeString + ".exr";
+        }
+
+        return "";
+    }();
+
+
+    /* FG */
+	hackExportFilenameFG = [&]() -> std::string {
+        constexpr uint32_t RawFrameStart = FramesToWarmup + 1;
+        if (frameIdx >= RawFrameStart && frameIdx < RawFrameStart + FramesToCapture) // within range
+        {
+            // map frame N to frame N - 1
+            uint32_t fid = frameIdx - RawFrameStart // batch-local matching frameID, 0 to 14
+                + hackOptions.batchIndex * FramesToCapture; // global matching frameID, 0 to 59
+
+            // if frameCount = 50, frame 50-59 does not exist
+            if (fid >= hackOptions.frameCount)
+                return "";
+
+            if (hackOptions.alignFilename)
+                fid += hackOptions.baseFrameIndex;
+
+            // align frameID to 4 digits, e.g. "3" to "0003" for cleaner folder view.
+            std::string frameIdStr = std::string(4 /* format length */ - std::to_string(fid).length(), '0')
+                + std::to_string(fid) + "_";
+
+            return std::filesystem::absolute(hackOptions.outPath).string() + "/" +
+                hackOptions.identifier + "_" + frameIdStr + hackOptions.modeString + "_fg.exr";
+		}
+
+        return "";
+	}();
+
+    return;
 }
 
 // Constructor
@@ -644,77 +872,18 @@ StreamlineSample::StreamlineSample(
     deviceManager->m_callbacks.beforeRender  = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_RenderStart(m, f); };
     deviceManager->m_callbacks.afterRender   = [](donut::app::DeviceManager &m, uint32_t f){ NVWrapper::Get().ReflexCallback_RenderEnd(m, f); };
     
-	/// We set capture of OG frame in beforePresent, and FG frame in afterPresent.
-    /// 
-    /// FramesToWarmup (default 3) is to solve the DLSS-G cold start problem.
-    /// Without it, captured frames are:
-    /// 0A: Visual Studio (renderer window not opened yet); 0B: Frame 0
-    /// 1A: Frame 0; 1B: Frame 1;
-    /// 2A: Frame 1; 2B: Frame 1; (This is weird)
-    /// 3A: Frame 2; 3B: Frame 2.5 (FG frame); etc.
-    /// The solution is simple: store the first FramesToWarmup frames in the next iteration, which are correct data,
-    /// to replace the first FramesToWarmup frames in the first iteration, which are wrong (see above) due to DLSSG cold start.
-    /// E.g we have 10 frames, then frames [10, 12] can be used as frames [0, 2]
-    /// 
-    /// Also, when calling capture function at frame t, frame t-1 is what's being
-    /// Presnet() and captured, probably because Present() is async.
-    /// Thus, we adjust the capture range (4-18 instead of 3-17) and filename accordingly.
-
     deviceManager->m_callbacks.beforePresent = [this](donut::app::DeviceManager& m, uint32_t frameIdx) {
         NVWrapper::Get().ReflexCallback_PresentStart(m, frameIdx);
-        
-        if (hackOptions.enableHack && hackOptions.storeOutput && // should store
-            frameIdx >= FramesToWarmup + 1 && // have skipped warmup frames
-            frameIdx <= FramesToCapture + FramesToWarmup) // within range
-        {
-            HWND hWnd = glfwGetWin32Window(m.GetWindow());
 
-			// map frame N to frame N - 1
-            uint32_t fid = (frameIdx + FramesToCapture - FramesToWarmup - 1) % FramesToCapture // 0 to 14
-                + hackOptions.batchIndex * FramesToCapture; // 0 to 59
-            if (fid >= hackOptions.frameCount) {
-                // if frameCount = 50, frame 50-59 does not exist
-                return;
-            }
-            // align frame number to 3 digits, e.g. "3" to "003" for cleaner folder view.
-            std::string frameIdStr = std::string(3 /* format length */ - std::to_string(fid).length(), '0') 
-                + std::to_string(fid) + "_";
-
-            std::string filename0 = std::filesystem::absolute(hackOptions.outPath).string() + "/" +
-                hackOptions.identifier + "_frame" + frameIdStr + hackOptions.modeString + ".exr";
-            //CaptureBitBlitLDR(hWnd, filename0);
-            CaptureFramePoolHDR(filename0);
-        }
-        // CaptureBitBlitLDR() and CaptureFramePoolHDR() will handle the synchronization internally.
+        DecideExportInfo();
     };
 
     deviceManager->m_callbacks.afterPresent  = [this](donut::app::DeviceManager &m, uint32_t frameIdx) {
 
-        if (hackOptions.enableHack && hackOptions.storeOutput && // should store
-            frameIdx >= FramesToWarmup + 1 && // have skipped warmup frames
-            frameIdx <= FramesToCapture + FramesToWarmup) // within range
-        {
-            HWND hWnd = glfwGetWin32Window(m.GetWindow());
-
-            // map frame N to frame N - 1
-            uint32_t fid = (frameIdx + FramesToCapture - FramesToWarmup - 1) % FramesToCapture // 0 to 14
-                + hackOptions.batchIndex * FramesToCapture; // 0 to 59
-            if (fid >= hackOptions.frameCount) {
-                // if frameCount = 50, frame 50-59 does not exist
-                NVWrapper::Get().ReflexCallback_PresentEnd(m, frameIdx);
-                return;
-            }
-            // align frame number to 3 digits, e.g. "3" to "003" for cleaner folder view.
-            std::string frameIdStr = std::string(3 /* format length */ - std::to_string(fid).length(), '0')
-                + std::to_string(fid) + "_";
-
-            std::string filename1 = hackOptions.outPath.string() + "/" +
-                hackOptions.identifier + "_frame" + frameIdStr + hackOptions.modeString + "_fg.exr";
-            //CaptureBitBlitLDR(hWnd, filename1);
-            CaptureFramePoolHDR(filename1);
-
+        if (!hackExportFilenameFG.empty()) {
+            CaptureFramePoolHDR(hackExportFilenameFG);
+            hackExportSlotFG++;
         }
-        // CaptureBitBlitLDR() and CaptureFramePoolHDR() will handle the synchronization internally.
 
         NVWrapper::Get().ReflexCallback_PresentEnd(m, frameIdx); 
     };
@@ -940,90 +1109,74 @@ winrt_foundation::IAsyncAction StreamlineSample::CleanupMediaCaptureAsync() {
 
 bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCache> textureCache)
 {
-    typedef donut::engine::TextureCache::HackDataType hackDataType;
-
     // Use a hash map to detect duplication.
     std::map<std::pair<uint32_t, uint32_t>, std::string> allSeenResolution;
 
-    auto loadFrameCaptures = [&]
-    (const std::filesystem::path& hackPath, hackDataType dtype)
-        -> std::vector<std::filesystem::path>
-    {
-        // Immediately invoked lambda
-        auto& hackLoadedData = [dtype, this]() -> std::vector<std::shared_ptr<donut::engine::TextureData>>&
+    const auto& colorPath = hackOptions.hackPaths[0];
+    const auto& mvdPath = hackOptions.hackPaths[1];
+    // Must add all (e.g. 60) file paths for batch loading logic, see below.
+    auto populatePathList = [](std::filesystem::path folderPath) -> std::vector<std::filesystem::path>
         {
-            switch (dtype) {
-            case hackDataType::COLOR_HDR:
-                return hackLoadedColorsHDR;
-            case hackDataType::MOTION_VECTORS:
-                return hackLoadedMVs;
-            case hackDataType::GBUFFER_DEPTH:
-                return hackLoadedDepths;
-            default:
-                log::error("Wrong hackDataType");
+            std::vector<std::filesystem::path> outPaths;
+            for (const auto& entry : std::filesystem::directory_iterator(folderPath))
+            {
+                if (entry.path().extension() == ".exr")
+                    outPaths.push_back(entry.path());
             }
-        }();
-            
-        std::vector<std::filesystem::path> filePaths;
-        size_t nFiles = textureCache->TraverseFolderPath(hackPath, filePaths);
-        // double check
-        assert(nFiles == hackOptions.frameCount,
-            "#input files counted by TraverseFolder() (%d) and lambda function in parser (%d) don't match.",
-            nTextures,
-            hackOptions.frameCount);
+            // Sort by frame order (assuming filenames contain frameID and start differing from it)
+            std::sort(outPaths.begin(), outPaths.end());
 
+            return outPaths;
+        };
+    const auto colorFiles = populatePathList(colorPath);
+    const auto mvdFiles = populatePathList(mvdPath);
+    if (colorFiles.size() != mvdFiles.size()) {
+        log::error("Different exr file count in %s (%d) and %s (%d)", 
+            colorPath.c_str(), colorFiles.size(),
+            mvdPath.c_str(), mvdFiles.size());
+    }
 
-        if (nFiles < hackOptions.frameCount) {
-            log::error("Expect total %d frames more than %s number of input frames: %d",
-                hackOptions.frameCount, hackPath.generic_string(), nFiles);
+    /// Here, we ALWAYS read 3 (for warm up) + 15 + 1 (for computing last 15th frame correctly) inputs.
+    /// e.g. if batchIndex = 0 (we want to capture frames 0 to 14), we load frames 0 to 14 
+    /// PLUS frame -3, -2, -1 (57 to 59) for warm up.
+    /// batchIndex: warmupStart
+    /// 0: -3, 1: 12, 2: 27, 3: 42
+    /// Thus we must use signed type.
+    int32_t warmupStart = static_cast<int32_t>(hackOptions.batchIndex * FramesToCapture) - 3;
+    // int + uint = uint, so cast to avoid overflow; this can go above .frameCount
+    int32_t loadEnd = warmupStart + static_cast<int32_t>(FramesToReplayTotal);
+
+    /// For last batch, e.g. frameCount = 50, we go from 42 to 49 then wrap around
+    for (int32_t i = warmupStart; i < loadEnd; ++i) {
+        size_t frameIdx = static_cast<size_t>(i < 0 ? i + hackOptions.frameCount : i) % hackOptions.frameCount;
+
+        auto loadedColor = textureCache->hackLoadColorFromFile(colorFiles[frameIdx].generic_string());
+        hackLoadedColorsHDR.emplace_back(loadedColor);
+        auto [loadedMV, loadedDepth] = textureCache->hackLoadMVDFromFile(mvdFiles[frameIdx].generic_string());
+        hackLoadedMVs.push_back(loadedMV);
+        hackLoadedDepths.push_back(loadedDepth);
+
+        // Instead of operator[], which keeps overwriting string value
+        allSeenResolution.try_emplace({ loadedColor->width, loadedColor->height }, loadedColor->path);
+        allSeenResolution.try_emplace({ loadedMV->width, loadedMV->height }, loadedMV->path);
+        allSeenResolution.try_emplace({ loadedDepth->width, loadedDepth->height }, loadedDepth->path);
+
+        if (hackOptions.parseJitter) {
+            hackLoadedJitterOffsets.emplace_back(
+                textureCache->hackLoadJitterDataFromFilename(colorFiles[frameIdx].stem().generic_string())
+            );
         }
+    }
 
-        /// Here, we ALWAYS read 3 (for warm up) + 15 + 1 (for computing last 15th frame correctly) inputs.
-        /// e.g. if batchIndex = 0 (we want to capture frames 0 to 14), we load frames 0 to 14 
-        /// PLUS frame -3, -2, -1 (57 to 59) for warm up.
-        /// batchIndex: warmupStart
-        /// 0: -3, 1: 12, 2: 27, 3: 42
-        int warmupStart = static_cast<int>(hackOptions.batchIndex * FramesToCapture) - 3;
-        
-        /// For last batch, e.g. frameCount = 50, we go from 42 to 49 then wrap around
-        /// 
-        /// int + uint = uint, so cast to avoid overflow
-        for (int i = warmupStart; i < warmupStart + static_cast<int>(FramesToReplayTotal); ++i) {
-            size_t frameIdx = static_cast<size_t>(i < 0 ? i + hackOptions.frameCount : i) % hackOptions.frameCount;
-            auto& filePath = filePaths[frameIdx];
-
-            std::shared_ptr<donut::engine::TextureData> loadedTexture = 
-                textureCache->hackLoadTextureFromFile(filePath, dtype);
-
-            hackLoadedData.push_back(loadedTexture);
-
-            // Instead of operator[], which keeps overwriting string value
-            allSeenResolution.try_emplace({ loadedTexture->width, loadedTexture->height }, filePath.string());
-        }
-
-        assert(hackLoadedData.size() == FramesToReplayTotal);
-
-        if (dtype == hackDataType::COLOR_HDR && hackOptions.parseJitter) {
-            // should parse jitter
-            textureCache->LoadJitterFromFileLists(filePaths, hackLoadedJitterOffsets,
-                FramesToReplayTotal, FramesToCapture);
-        }
-        return filePaths;
-    };
-
-    auto exrFiles = loadFrameCaptures(hackOptions.hackPaths[0], hackDataType::COLOR_HDR);
-    auto mvFiles = loadFrameCaptures(hackOptions.hackPaths[1], hackDataType::MOTION_VECTORS);
-    auto depthFiles = loadFrameCaptures(hackOptions.hackPaths[1], hackDataType::GBUFFER_DEPTH);
-
-    // DEBUG
+    // DEBUG tiled exr loading
     {
         //const std::filesystem::path tile_path("../media/TEST_SCENE/TILED_IN");
-        //std::vector<std::filesystem::path> tile_files;
-        //textureCache->TraverseFolderPath(tile_path, tile_files);  // this would be 1
+        //// this would be 1
+        //std::vector<std::filesystem::path> tile_files = populatePathList(tile_path);
         //const auto colorSize = hackLoadedColorsHDR.size();
         //hackLoadedColorsHDR.clear();
-        //std::shared_ptr<donut::engine::TextureData> loadedTiledTexture =
-        //    textureCache->hackLoadTextureFromFile(tile_files[0], hackDataType::COLOR_HDR);
+        //auto loadedTiledTexture =
+        //    textureCache->hackLoadColorFromFile(tile_files[0].generic_string());
         //hackLoadedColorsHDR.resize(colorSize, loadedTiledTexture);
     }
 
@@ -1036,6 +1189,7 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
         log::error("StreamlineSample::LoadHackTextures() ABORT");
     }
     const auto& res = allSeenResolution.begin()->first;
+    // final piece of hack options
     hackOptions.renderResolution = int2(res.first, res.second);
     
     return true;
@@ -2147,7 +2301,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     }
 
 #ifdef STREAMLINE_FEATURE_DLSS_RR
-    // Deafult On; NOTE that mvec will NOT be rendered when raytracing
+    // Default On; NOTE that mvec will NOT be rendered when raytracing
     if(m_ui.RayTracing_Mode && GetDevice()->getGraphicsAPI() != nvrhi::GraphicsAPI::D3D11)
     {   
         // Set lighting constants
@@ -2268,23 +2422,24 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         NVWrapper::Get().SetSLConsts(slConstants);
     }
 
-    // TAG STREAMLINE RESOURCES
-    if (hackOptions.enableHack) {
-        NVWrapper::Get().TagResources_General(m_CommandList,
-            m_View->GetChildView(ViewType::PLANAR, 0),
-            m_RenderTargets->hackMotionVectors,
-            m_RenderTargets->hackDepth,
-            // PreUIColor is only used as DLSS output target, thus we don't create hack version of it. 
-            m_RenderTargets->PreUIColor
+	// TAG STREAMLINE RESOURCES
+	if (hackOptions.enableHack) {
+		NVWrapper::Get().TagResources_General(m_CommandList,
+			m_View->GetChildView(ViewType::PLANAR, 0),
+			m_RenderTargets->hackMotionVectors,
+			m_RenderTargets->hackDepth,
+			// PreUIColor is only used as DLSS output target, thus we don't create hack version of it. 
+			m_RenderTargets->PreUIColor
+		);
+	}
+	else {
+		NVWrapper::Get().TagResources_General(m_CommandList,
+			m_View->GetChildView(ViewType::PLANAR, 0),
+			m_RenderTargets->MotionVectors,
+			m_RenderTargets->Depth,
+			m_RenderTargets->PreUIColor
         );
-    }
-    else {
-        NVWrapper::Get().TagResources_General(m_CommandList,
-            m_View->GetChildView(ViewType::PLANAR, 0),
-            m_RenderTargets->MotionVectors,
-            m_RenderTargets->Depth,
-            m_RenderTargets->PreUIColor);
-    }
+	}
 
 #ifdef STREAMLINE_FEATURE_DLSS_RR
     // Set feature options; DLSSRR_Mode default OFF
@@ -2302,8 +2457,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     
     // ANTI-ALIASING
 
-    // TAG STREAMLINE RESOURCES
-    // For some reason, NIS tag will take effect even when we turn NIS off.
+    // TAG NIS (Nvidia Image Scaling) RESOURCES, i.e. pre-upscaled and post-upscaled buffers.
     if (hackOptions.enableHack) {
         NVWrapper::Get().TagResources_DLSS_NIS(m_CommandList,
             m_View->GetChildView(ViewType::PLANAR, 0),
@@ -2350,15 +2504,15 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
 #ifdef STREAMLINE_FEATURE_DLSS_RR
     if (m_ui.DLSSRR_Mode != sl::DLSSMode::eOff)
     {   
-        NVWrapper::Get().TagResources_DLSS_RR(
-        m_CommandList,
-        m_View->GetChildView(ViewType::PLANAR, 0),
-        m_RenderTargets->HdrColor,
-        m_RenderTargets->GBufferDiffuseRR,
-        m_RenderTargets->GBufferSpecularRR,
-        m_RenderTargets->GBufferNormalsRR,
-        m_RenderTargets->SpecHitDistance,
-        m_RenderTargets->AAResolvedColor);
+		NVWrapper::Get().TagResources_DLSS_RR(
+			m_CommandList,
+			m_View->GetChildView(ViewType::PLANAR, 0),
+			m_RenderTargets->HdrColor,
+			m_RenderTargets->GBufferDiffuseRR,
+			m_RenderTargets->GBufferSpecularRR,
+			m_RenderTargets->GBufferNormalsRR,
+			m_RenderTargets->SpecHitDistance,
+			m_RenderTargets->AAResolvedColor);
 
         NVWrapper::Get().EvaluateDLSSRR(m_CommandList);
     }
@@ -2517,65 +2671,9 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     m_CommandList->close();
     GetDevice()->executeCommandList(m_CommandList);
 
-    // EXPORT: backend export disabled because it cannot capture FG frames
-    if (false && hackOptions.enableHack && hackOptions.storeOutput && // should store
-        GetFrameIndex() >= FramesToWarmup && // have skipped dummy frames
-        GetFrameIndex() < FramesToWarmup + FramesToCapture) // within range
-    {
-        auto filePath = hackOptions.outPath;
-        if (!std::filesystem::exists(filePath)) {
-            bool created = std::filesystem::create_directory(filePath);
-            log::warning("hack output path not exist, created success? %d", created);
-        }
-		std::string filename = "/" + hackOptions.identifier + "_" + std::to_string(GetFrameIndex()) + ".exr";
-        filePath += filename;
-        bool success = false;
-
-        uint sourceId = 3;  // 0: AAResolvedColor, 1: PreUIColor, 2: all 3 back buffers, 3: motion vectors
-        if (sourceId == 0) {
-            auto& _checkColorAttachement = m_RenderTargets->AAResolvedFramebuffer->RenderTargets;
-            success = SaveRTsToEXR(
-                GetDevice(),
-                //m_RenderTargets->AAResolvedColor,
-				m_RenderTargets->AAResolvedFramebuffer->GetFramebuffer(*m_View)->getDesc().colorAttachments[0].texture,
-                filePath.string().c_str()
-            );
-        }
-        else if (sourceId == 1) {
-            success = SaveRTsToEXR(
-                GetDevice(),
-                m_RenderTargets->PreUIColor,
-                filePath.string().c_str()
-            );
-        }
-        else if (sourceId == 2) {
-            auto& fbDesc = framebuffer->getDesc();
-            success = true;  // We && it with each return bool
-            for (int i = 0; i < 3; i++) {
-                filename = hackOptions.identifier + "_" + std::to_string(GetFrameIndex())
-                    + "_bb" + std::to_string(i) + ".exr";
-                auto fp = hackOptions.outPath / filename;
-                success = success && SaveRTsToEXR(
-                    GetDevice(),
-                    framebuffer->getDesc().colorAttachments[i].texture,
-                    fp.string().c_str()
-                );
-            }
-        }
-        else if (sourceId == 3) {
-            success = SaveMVDepthsToEXR(
-                false,
-                GetDevice(),
-                //hackOptions.enableHack ? m_RenderTargets->hackMotionVectors : m_RenderTargets->MotionVectors,
-                hackOptions.enableHack ? m_RenderTargets->hackDepth : m_RenderTargets->Depth,
-                filePath.string().c_str()
-			);
-        }
-        else {
-            log::error("Wrong setting uint sourceId = %d;  // 0: AAResolvedColor, 1: PreUIColor, 2: all 3 back buffers", sourceId);
-        }
-        assert(success, "Export to EXR failed");
-        //bool writeSuccess = TestTinyExrWrite();
+    if (!hackExportFilenameSR.empty()) {
+        MapRenderTargetDataHDR(m_RenderTargets->AAResolvedColor, hackExportFilenameSR);
+        hackExportSlotSR++;
     }
 
     // CLEANUP
@@ -2597,12 +2695,12 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
         if (!hash_bin.empty()) {
             log::info("Saving %d captured frames in the end.", hash_bin.size());
             for (const auto& [hashKey, frameData] : hash_bin) {
-                if (frameData.filename.find("fg.exr") == std::string::npos) {
-                    // we don't write rendered frame to FS
-                    continue;
-                }
+                // DEBUG: skip FG export
+                //if (frameData.filename.find("_fg") != std::string::npos) {
+                //    continue;
+                //}
                 bool success = SaveStagingTextureDataToEXR(
-                    frameData.data.data(),
+                    frameData.data,
                     frameData.rowPitch,
 					frameData.width, frameData.height,
                     frameData.filename

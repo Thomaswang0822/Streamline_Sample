@@ -239,7 +239,8 @@ int main(int __argc, const char* const* __argv)
     deviceParams.swapChainBufferCount = 3;
     deviceParams.startFullscreen = false;
     deviceParams.vsyncEnabled = true;
-    deviceParams.swapChainFormat = nvrhi::Format::BGRA8_UNORM;
+    /// RGBA16_FLOAT will "disable" DLSSG, and R11G11B10_FLOAT cannot be handled by dx12.
+    deviceParams.swapChainFormat = nvrhi::Format::R10G10B10A2_UNORM;
 
 #ifndef NDEBUG
     if (api != nvrhi::GraphicsAPI::VULKAN)
@@ -363,6 +364,7 @@ int main(int __argc, const char* const* __argv)
         assert(pApp->getViewportCount() > 0, "No valid viewport");
         auto slSample = pApp->getASample();
         slSample->hackOptions = hackOptions;
+        slSample->InitMemoryPool();
         // hide cursor and load data before the main loop
         if (hackOptions.enableHack) {
             glfwSetInputMode(deviceManager->GetWindow(), GLFW_CURSOR, GLFW_CURSOR_HIDDEN);

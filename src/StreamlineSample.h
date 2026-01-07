@@ -288,7 +288,7 @@ private:
     bool SaveIfUniqueTexture(
         winrt::com_ptr<ID3D11Device> device,
         winrt::com_ptr<ID3D11Texture2D> texture,
-        const std::string filename);
+        const std::string& filename);
 #pragma endregion
 
 public:
@@ -316,24 +316,61 @@ public:
     struct HackOptionDef
     {
         bool enableHack = false;
-        std::string identifier = "";
-        donut::math::uint2 displayResolution = { 2560, 1440 };
+        /// If true, a jitter pair will be parsed from each input filename.
+        /// e.g. NPP_beauty_2472_0000_0_-0.40563965_-0.35599041.exr gives (-0.40563965, -0.35599041)
         bool parseJitter = false;
-        std::vector<std::filesystem::path> hackPaths = {};
         bool storeOutput = false;
-        size_t batchIndex = 0;
-        std::filesystem::path outPath = "";
+        /// This helps filesystem and image viewers to sort them in order. @see PostProcess() below.
+        bool alignFilename = false;
 
-        // INTERNAL, determined by exr files count in hackPaths
+        donut::math::uint2 displayResolution = { 2560, 1440 };
+        std::filesystem::path outPath = "";
+        /// An optional custom identifier for hack export filename, used as the prefix. i.e. <identifier>_<frameID>_<modeString>.exr
+        /// Overwritten by input filename prefix if `alignFilename` is true or itself is not set.
+        std::string identifier = "";
+        /// Stores full paths to Color data and MV + Depth data (almost always NPP_JI and MVD_JI for us).
+        std::vector<std::filesystem::path> hackPaths = {};
+        /// Because of limitation of frame capture, we have this multi-run batch captures approach. This index to which batch of current run.
+        size_t batchIndex = 0;
+
+        /// INTERNAL, determined by exr files count in hackPaths
         size_t frameCount = 0;
+        /// INTERNAL When `alignFilename`, we get the base frame index also from filename, 
+        /// such that the 1st exported frame is not "0000" but "2472".
+        size_t baseFrameIndex = 0;
         size_t totalBatches = 0;
         // INTERNAL, determined by (equal to) input exr size
         donut::math::int2 renderResolution;
         // INTERNAL, determined by display/render resolution
         std::string modeString;
 
+        /**
+         * @brief Do the following AFTER setup the struct from json config and cmdline:
+         *
+         * 1. If outPath not given, set to <parent of Color Path>/outputs
+         *
+         * 2. Set frameCount to MVD count.
+         *
+         * 3. Iterate thru color testdata files. Extract prefix and frameID from each filename. Store the smallest frameID;
+         * ensure all files have the same prefix. If identifier is not given, set to prefix.
+         *
+         * 4. If alignFilename, set baseFrameIndex to smallest frameID and overwrite identifier to prefix.
+         *
+         * e.g. For "NPP_beauty_2472_0000_0_-0.40563965_-0.35599041.exr" being the first frame, its reference has name "NPP_beauty_2472.exr" (in NPP_GT/).
+         * The identifier will be set to "NPP_beauty" and baseFrameIndex to 2072.
+         * In this way, we output filenames "NPP_beauty_2472_[Quality | Quality_fg].exr", which helps filesystem and image viewers to sort them in order.
+         *
+         * @return true if nothing worng.
+         * @throw CauldronError if a) Color count and MVD count mismatch or any is empty. b) Color filenames have more than 1 prefix.
+         */
+        bool PostProcess();
     } hackOptions;
     // constexpr variables for hack
+
+    // Modify them if necessary:
+    static constexpr char ColorSubdir[] = "/NPP_JI";
+    static constexpr char MVDSubdir[]   = "/MVD_JI";
+
     constexpr static uint64_t CaptureTimeoutMS = 100;
     /**
      * @brief INTERNAL, for sleep bubble trick.
@@ -356,7 +393,7 @@ public:
     constexpr static uint32_t DuplicateMaxRetry = 5;
     /**
      * @brief INTERNAL, used for DLSS-G cold start problem.
-     * See StreamlineSample() constructor where we set Present callback to see how it works
+     * See comments in DecideExportInfo() body to see how it works
      */
     constexpr static uint32_t FramesToWarmup = 3;
     constexpr static uint32_t FramesToCapture = 15;
@@ -370,17 +407,53 @@ public:
     std::vector<donut::math::float2> hackLoadedJitterOffsets;
 
     struct FrameData {
-        std::vector<uint8_t> data;
+        const uint8_t* data;
         const uint32_t rowPitch;
         const int width;
         const int height;
         const std::string filename;
     };
 
+    /// MemoryPool for exporting
+
+    std::unique_ptr<uint8_t[]> hackExportMemoryPoolSR;
+    std::unique_ptr<uint8_t[]> hackExportMemoryPoolFG;
+    uint32_t hackExportSlotSR = 0;
+	uint32_t hackExportSlotFG = 0;
+    size_t hackExportBytesPerFrame = 0;
+
+    std::string hackExportFilenameSR = ""; // Set by DecideExportInfo() in beforePresent callback
+    std::string hackExportFilenameFG = ""; // Set by DecideExportInfo() in beforePresent callback
+
     /**
      * @brief Stores image by xxhash XXH64(). Used for duplication detection after capture before export.
      */
     std::unordered_map<uint64_t, FrameData> hash_bin;
+
+    inline void InitMemoryPool() {
+        // ~63.3MB
+        hackExportBytesPerFrame = hackOptions.displayResolution.x * hackOptions.displayResolution.y *
+			8 /* RGBA16_FLOAT bytes per pixel */;
+
+        hackExportMemoryPoolSR = std::make_unique<uint8_t[]>(FramesToCapture * hackExportBytesPerFrame);
+        hackExportMemoryPoolFG = std::make_unique<uint8_t[]>(FramesToCapture * hackExportBytesPerFrame);
+    }
+
+    /**
+     * @brief Called per frame in beforePresent callback to decide whther to capture SR and FG frame data.
+     * 
+     * By "capture", we mean:
+     * 
+     * (1) Call MapRenderTargetDataHDR() in RenderScene() to get SR frame data directly from AAResolvedColor.
+     * 
+	 * (2) Call CaptureFramePoolHDR() in afterPresent callback to get FG frame data from front-end window.
+     * 
+     * Set strings hackExportFilenameSR and hackExportFilenameFG to the final export filenames.
+	 * Their respective frameID is adjusted with different logic, see comments in the function body.
+     * 
+     * If not within the respective capture frames range, set to empty for these 2 capture functions to skip.
+     */
+    void DecideExportInfo();
 
     /**
      * Load test inputs from disk. Also, it sets hackOptions.renderResolution to the input resolution.
@@ -439,7 +512,20 @@ public:
      *  
      * We install Windows Implementation Library (wil) and use wil::shared_event to handle FrameArrived()
      */
-    void CaptureFramePoolHDR(const std::string filename);
+    void CaptureFramePoolHDR(const std::string& filename);
+
+    /**
+     * @brief Attempt 8 Amendment: Given a backend RenderTarget, map to raw data and add to hash_bin if no duplicate found.
+     *
+     * Using front-end approach CaptureFramePoolHDR() on SR export is unnecessary,
+     * as we can directly read from AAResolvedColor. Also, calling CaptureFramePoolHDR() on both SR and FG
+     * export causes timing issue and often results in several wrong frames.
+     * 
+     * @param texture Should be m_RenderTargets->AAResolvedColor, but can be used on other RGBA16_FLOAT RTs as well.
+     * @param filename 
+     * @return 
+     */
+    bool MapRenderTargetDataHDR(nvrhi::TextureHandle texture, const std::string& filename);
 
 #pragma endregion
 
