@@ -364,6 +364,7 @@ int main(int __argc, const char* const* __argv)
         assert(pApp->getViewportCount() > 0, "No valid viewport");
         auto slSample = pApp->getASample();
         slSample->hackOptions = hackOptions;
+        slSample->InitMemoryPool();
         // hide cursor and load data before the main loop
         if (hackOptions.enableHack) {
             glfwSetInputMode(deviceManager->GetWindow(), GLFW_CURSOR, GLFW_CURSOR_HIDDEN);

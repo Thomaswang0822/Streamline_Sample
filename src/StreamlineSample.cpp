@@ -477,6 +477,18 @@ bool StreamlineSample::SaveIfUniqueTexture(winrt::com_ptr<ID3D11Device> device, 
     // Create staging texture
     D3D11_TEXTURE2D_DESC desc;
     texture->GetDesc(&desc);
+
+    /// This will happen in windowed mode, i.e. (deviceParams.startFullscreen = false)
+    /// E.g. A 2562 x 1453 window will be displayed for 2560 x 1440 display resolution.
+    if (desc.Width != hackOptions.displayResolution.x || desc.Height != hackOptions.displayResolution.y) {
+        log::warning("Captured FG frame size [%d, %d] mismatches expected display resolution [%d, %d]",
+            desc.Width, desc.Height,
+            hackOptions.displayResolution.x, hackOptions.displayResolution.y);
+        log::warning("Likely due to (1) starting in windowed mode (2) Monitor smaller than specified display resolution. Will skip FG frame capture.");
+        // To stop retrying another capture
+        return true;
+    }
+
     const int width = desc.Width;
     const int height = desc.Height;
     const size_t bytesPerPixel = 4 * 2; // RGBA16_FLOAT
@@ -522,13 +534,12 @@ bool StreamlineSample::SaveIfUniqueTexture(winrt::com_ptr<ID3D11Device> device, 
     bool uniqueHash = !hash_bin.contains(hash64);;
     if (uniqueHash) {
         // unique, save it
-        FrameData frameData = { {}, mapped.RowPitch, width, height, filename };
-        
-        // assign() instead of old-school memcpy()
-        frameData.data.assign(
-            static_cast<const uint8_t*>(mapped.pData),
-            static_cast<const uint8_t*>(mapped.pData) + height * mapped.RowPitch
-        );
+        uint8_t* slotStart = hackExportMemoryPoolFG.get() + hackExportSlotFG * hackExportBytesPerFrame;
+
+        // We already ensure the actually captured window size matches target display resolution.
+        std::memcpy(slotStart, mapped.pData, hackExportBytesPerFrame);
+
+        FrameData frameData = { slotStart, mapped.RowPitch, width, height, filename };
 
         hash_bin.emplace(hash64, std::move(frameData));
     }
@@ -618,6 +629,11 @@ bool StreamlineSample::MapRenderTargetDataHDR(nvrhi::TextureHandle texture, cons
     if (desc.format != nvrhi::Format::RGBA16_FLOAT) {
         log::error("MapRenderTargetDataHDR only supports RGBA16_FLOAT texture");
 	}
+    if (desc.width != hackOptions.displayResolution.x || desc.height != hackOptions.displayResolution.y) {
+        log::error("MapRenderTargetDataHDR texture size [%d, %d] mismatches expected display resolution [%d, %d]",
+            desc.width, desc.height,
+            hackOptions.displayResolution.x, hackOptions.displayResolution.y);
+	}
 
     // Create command list and staging texture
     nvrhi::CommandListHandle commandList = GetDevice()->createCommandList();
@@ -638,12 +654,10 @@ bool StreamlineSample::MapRenderTargetDataHDR(nvrhi::TextureHandle texture, cons
     // process and return accordingly
     bool uniqueHash = !hash_bin.contains(hash64);;
     if (uniqueHash) {
-        FrameData frameData = { {}, rowPitchBytes, desc.width, desc.height, filename };
-        // assign() instead of old-school memcpy()
-        frameData.data.assign(
-            static_cast<const uint8_t*>(rawData),
-            static_cast<const uint8_t*>(rawData) + desc.height * rowPitchBytes
-        );
+        uint8_t* slotStart = hackExportMemoryPoolSR.get() + hackExportSlotSR * hackExportBytesPerFrame;
+        std::memcpy(slotStart, rawData, hackExportBytesPerFrame);
+
+        FrameData frameData = { slotStart, rowPitchBytes, desc.width, desc.height, filename};
 
         hash_bin.emplace(hash64, std::move(frameData));
     }
@@ -868,6 +882,7 @@ StreamlineSample::StreamlineSample(
 
         if (!hackExportFilenameFG.empty()) {
             CaptureFramePoolHDR(hackExportFilenameFG);
+            hackExportSlotFG++;
         }
 
         NVWrapper::Get().ReflexCallback_PresentEnd(m, frameIdx); 
@@ -2656,8 +2671,10 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
     m_CommandList->close();
     GetDevice()->executeCommandList(m_CommandList);
 
-    if (!hackExportFilenameSR.empty())
-		MapRenderTargetDataHDR(m_RenderTargets->AAResolvedColor, hackExportFilenameSR);
+    if (!hackExportFilenameSR.empty()) {
+        MapRenderTargetDataHDR(m_RenderTargets->AAResolvedColor, hackExportFilenameSR);
+        hackExportSlotSR++;
+    }
 
     // CLEANUP
     {
@@ -2683,7 +2700,7 @@ void StreamlineSample::RenderScene(nvrhi::IFramebuffer* framebuffer)
                 //    continue;
                 //}
                 bool success = SaveStagingTextureDataToEXR(
-                    frameData.data.data(),
+                    frameData.data,
                     frameData.rowPitch,
 					frameData.width, frameData.height,
                     frameData.filename

@@ -407,12 +407,20 @@ public:
     std::vector<donut::math::float2> hackLoadedJitterOffsets;
 
     struct FrameData {
-        std::vector<uint8_t> data;
+        const uint8_t* data;
         const uint32_t rowPitch;
         const int width;
         const int height;
         const std::string filename;
     };
+
+    /// MemoryPool for exporting
+
+    std::unique_ptr<uint8_t[]> hackExportMemoryPoolSR;
+    std::unique_ptr<uint8_t[]> hackExportMemoryPoolFG;
+    uint32_t hackExportSlotSR = 0;
+	uint32_t hackExportSlotFG = 0;
+    size_t hackExportBytesPerFrame = 0;
 
     std::string hackExportFilenameSR = ""; // Set by DecideExportInfo() in beforePresent callback
     std::string hackExportFilenameFG = ""; // Set by DecideExportInfo() in beforePresent callback
@@ -421,6 +429,15 @@ public:
      * @brief Stores image by xxhash XXH64(). Used for duplication detection after capture before export.
      */
     std::unordered_map<uint64_t, FrameData> hash_bin;
+
+    inline void InitMemoryPool() {
+        // ~63.3MB
+        hackExportBytesPerFrame = hackOptions.displayResolution.x * hackOptions.displayResolution.y *
+			8 /* RGBA16_FLOAT bytes per pixel */;
+
+        hackExportMemoryPoolSR = std::make_unique<uint8_t[]>(FramesToCapture * hackExportBytesPerFrame);
+        hackExportMemoryPoolFG = std::make_unique<uint8_t[]>(FramesToCapture * hackExportBytesPerFrame);
+    }
 
     /**
      * @brief Called per frame in beforePresent callback to decide whther to capture SR and FG frame data.
