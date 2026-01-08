@@ -64,6 +64,8 @@
 #include <winrt/Windows.Media.AppRecording.h>
 
 #include <winrt/Windows.Graphics.Capture.h>
+
+#include <Windows.UI.Interop.h>
 #include <Windows.Graphics.Capture.Interop.h>
 #include <Windows.Graphics.Directx.Direct3d11.Interop.h>
 
@@ -406,18 +408,17 @@ bool StreamlineSample::CreateCaptureDevice()
 
 bool StreamlineSample::CreateCaptureItemForWindow()
 {
-    auto window_ptr = GetDeviceManager()->GetWindow();
-    if (window_ptr == nullptr)
-    {
-        log::error("No GLFW window set");
-        return false;
-    }
-    HWND hwnd = glfwGetWin32Window(window_ptr);
+    HWND hwnd = glfwGetWin32Window(GetDeviceManager()->GetWindow());
     if (hwnd == nullptr)
     {
         log::error("Can't get HWND from GLFW window");
         return false;
     }
+
+    //// Another hacky way to init m_captureItem, but doesn't change capture rect size.
+    //winrt::Windows::UI::WindowId windowID = { .Value = reinterpret_cast<uint64_t>(hwnd) };
+    //m_captureItem = winrt::Windows::Graphics::Capture::GraphicsCaptureItem::TryCreateFromWindowId(windowID);
+    
     // Use interop interface to create capture item
     auto interop = winrt::get_activation_factory<winrt::Windows::Graphics::Capture::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
     winrt::check_hresult(interop->CreateForWindow(
