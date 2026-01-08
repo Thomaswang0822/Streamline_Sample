@@ -422,6 +422,9 @@ public:
 	uint32_t hackExportSlotFG = 0;
     size_t hackExportBytesPerFrame = 0;
 
+    // DEBUG
+    size_t hackExportBytesPerFrameFG = 0;
+
     std::string hackExportFilenameSR = ""; // Set by DecideExportInfo() in beforePresent callback
     std::string hackExportFilenameFG = ""; // Set by DecideExportInfo() in beforePresent callback
 
@@ -436,7 +439,7 @@ public:
 			8 /* RGBA16_FLOAT bytes per pixel */;
 
         hackExportMemoryPoolSR = std::make_unique<uint8_t[]>(FramesToCapture * hackExportBytesPerFrame);
-        hackExportMemoryPoolFG = std::make_unique<uint8_t[]>(FramesToCapture * hackExportBytesPerFrame);
+        hackExportMemoryPoolFG = std::make_unique<uint8_t[]>((FramesToCapture + 1) * hackExportBytesPerFrameFG);
     }
 
     /**

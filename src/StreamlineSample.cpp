@@ -425,6 +425,10 @@ bool StreamlineSample::CreateCaptureItemForWindow()
         winrt::guid_of<ABI::Windows::Graphics::Capture::IGraphicsCaptureItem>(),
         reinterpret_cast<void**>(winrt::put_abi(m_captureItem))
     ));
+    auto captureRectSize = m_captureItem.Size();
+    hackExportBytesPerFrameFG = static_cast<size_t>(captureRectSize.Width) *
+        static_cast<size_t>(captureRectSize.Height) *
+		4 * 2; // RGBA16_FLOAT
     return true;
 }
 
@@ -480,14 +484,14 @@ bool StreamlineSample::SaveIfUniqueTexture(winrt::com_ptr<ID3D11Device> device, 
 
     /// This will happen in windowed mode, i.e. (deviceParams.startFullscreen = false)
     /// E.g. A 2562 x 1453 window will be displayed for 2560 x 1440 display resolution.
-    if (desc.Width != hackOptions.displayResolution.x || desc.Height != hackOptions.displayResolution.y) {
-        log::warning("Captured FG frame size [%d, %d] mismatches expected display resolution [%d, %d]",
-            desc.Width, desc.Height,
-            hackOptions.displayResolution.x, hackOptions.displayResolution.y);
-        log::warning("Likely due to (1) starting in windowed mode (2) Monitor smaller than specified display resolution. Will skip FG frame capture.");
-        // To stop retrying another capture
-        return true;
-    }
+    //if (desc.Width != hackOptions.displayResolution.x || desc.Height != hackOptions.displayResolution.y) {
+    //    log::warning("Captured FG frame size [%d, %d] mismatches expected display resolution [%d, %d]",
+    //        desc.Width, desc.Height,
+    //        hackOptions.displayResolution.x, hackOptions.displayResolution.y);
+    //    log::warning("Likely due to (1) starting in windowed mode (2) Monitor smaller than specified display resolution. Will skip FG frame capture.");
+    //    // To stop retrying another capture
+    //    return true;
+    //}
 
     const int width = desc.Width;
     const int height = desc.Height;
@@ -534,10 +538,10 @@ bool StreamlineSample::SaveIfUniqueTexture(winrt::com_ptr<ID3D11Device> device, 
     bool uniqueHash = !hash_bin.contains(hash64);;
     if (uniqueHash) {
         // unique, save it
-        uint8_t* slotStart = hackExportMemoryPoolFG.get() + hackExportSlotFG * hackExportBytesPerFrame;
+        uint8_t* slotStart = hackExportMemoryPoolFG.get() + hackExportSlotFG * hackExportBytesPerFrameFG;
 
         // We already ensure the actually captured window size matches target display resolution.
-        std::memcpy(slotStart, mapped.pData, hackExportBytesPerFrame);
+        std::memcpy(slotStart, mapped.pData, hackExportBytesPerFrameFG);
 
         FrameData frameData = { slotStart, mapped.RowPitch, width, height, filename };
 
