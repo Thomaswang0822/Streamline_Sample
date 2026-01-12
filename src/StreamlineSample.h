@@ -343,6 +343,8 @@ public:
         donut::math::int2 renderResolution;
         // INTERNAL, determined by display/render resolution
         std::string modeString;
+        // INTERNAL: determined by filenames, to format frameID in filenames with leading zeros
+        size_t maxFrameIDLength = 0;
 
         /**
          * @brief Do the following AFTER setup the struct from json config and cmdline:

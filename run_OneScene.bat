@@ -19,7 +19,7 @@ rem IMPORTANT NOTE: Batch script executes commands in Windows command prompt whi
 set DisplayResolution=4
 rem set AlignFilename=
 set AlignFilename=-AlignFilename
-set INPUT_ROOT=..\media\TEST_SCENE
+set INPUT_ROOT=..\media\EmptySanityCheck60\Vertical
 set OUTPUT_ROOT=%INPUT_ROOT%\screenshots
 
 rem set "Has_Ref=" if you DON'T want to copy references in NPP_GT to OUTPUT_ROOT (for comparison)

@@ -65,7 +65,7 @@
 
 #include <winrt/Windows.Graphics.Capture.h>
 
-#include <Windows.UI.Interop.h>
+//#include <Windows.UI.Interop.h>
 #include <Windows.Graphics.Capture.Interop.h>
 #include <Windows.Graphics.Directx.Direct3d11.Interop.h>
 
@@ -301,6 +301,7 @@ bool StreamlineSample::HackOptionDef::PostProcess()
             if (!token.empty() && std::all_of(token.begin(), token.end(), ::isdigit)) {
                 minID = std::min(minID, std::stoull(token));
                 allSeenPrefix.emplace(pathPrefix);
+				maxFrameIDLength = std::max(maxFrameIDLength, token.length());
                 break;
             }
             else {
@@ -680,9 +681,6 @@ bool StreamlineSample::MapRenderTargetDataHDR(nvrhi::TextureHandle texture, cons
 
 void StreamlineSample::DecideExportInfo()
 {
-	// To format frameID with leading zeros
-	const static size_t FrameIDFormatLength = std::to_string(hackOptions.baseFrameIndex + hackOptions.frameCount - 1).length();
-
     if (!(hackOptions.enableHack && hackOptions.storeOutput))
         return;
 
@@ -732,7 +730,7 @@ void StreamlineSample::DecideExportInfo()
                 fid += hackOptions.baseFrameIndex;
 
             // align frameID to 4 digits, e.g. "3" to "0003" for cleaner folder view.
-            std::string frameIdStr = std::string(FrameIDFormatLength - std::to_string(fid).length(), '0')
+            std::string frameIdStr = std::string(hackOptions.maxFrameIDLength - std::to_string(fid).length(), '0')
                 + std::to_string(fid) + "_";
 
             return std::filesystem::absolute(hackOptions.outPath).string() + "/" +
@@ -760,7 +758,7 @@ void StreamlineSample::DecideExportInfo()
                 fid += hackOptions.baseFrameIndex;
 
             // align frameID to 4 digits, e.g. "3" to "0003" for cleaner folder view.
-            std::string frameIdStr = std::string(FrameIDFormatLength - std::to_string(fid).length(), '0')
+            std::string frameIdStr = std::string(hackOptions.maxFrameIDLength - std::to_string(fid).length(), '0')
                 + std::to_string(fid) + "_";
 
             return std::filesystem::absolute(hackOptions.outPath).string() + "/" +
