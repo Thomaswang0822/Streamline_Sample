@@ -675,6 +675,9 @@ bool StreamlineSample::MapRenderTargetDataHDR(nvrhi::TextureHandle texture, cons
 
 void StreamlineSample::DecideExportInfo()
 {
+	// To format frameID with leading zeros
+	const static size_t FrameIDFormatLength = std::to_string(hackOptions.baseFrameIndex + hackOptions.frameCount - 1).length();
+
     if (!(hackOptions.enableHack && hackOptions.storeOutput))
         return;
 
@@ -724,7 +727,7 @@ void StreamlineSample::DecideExportInfo()
                 fid += hackOptions.baseFrameIndex;
 
             // align frameID to 4 digits, e.g. "3" to "0003" for cleaner folder view.
-            std::string frameIdStr = std::string(4 /* format length */ - std::to_string(fid).length(), '0')
+            std::string frameIdStr = std::string(FrameIDFormatLength - std::to_string(fid).length(), '0')
                 + std::to_string(fid) + "_";
 
             return std::filesystem::absolute(hackOptions.outPath).string() + "/" +
@@ -752,7 +755,7 @@ void StreamlineSample::DecideExportInfo()
                 fid += hackOptions.baseFrameIndex;
 
             // align frameID to 4 digits, e.g. "3" to "0003" for cleaner folder view.
-            std::string frameIdStr = std::string(4 /* format length */ - std::to_string(fid).length(), '0')
+            std::string frameIdStr = std::string(FrameIDFormatLength - std::to_string(fid).length(), '0')
                 + std::to_string(fid) + "_";
 
             return std::filesystem::absolute(hackOptions.outPath).string() + "/" +
@@ -1140,21 +1143,31 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
             colorPath.c_str(), colorFiles.size(),
             mvdPath.c_str(), mvdFiles.size());
     }
+    const size_t totalInputFrames = colorFiles.size();
 
     /// Here, we ALWAYS read 3 (for warm up) + 15 + 1 (for computing last 15th frame correctly) inputs.
-    /// e.g. if batchIndex = 0 (we want to capture frames 0 to 14), we load frames 0 to 14 
-    /// PLUS frame -3, -2, -1 (57 to 59) for warm up.
-    /// batchIndex: warmupStart
-    /// 0: -3, 1: 12, 2: 27, 3: 42
-    /// Thus we must use signed type.
-    int32_t warmupStart = static_cast<int32_t>(hackOptions.batchIndex * FramesToCapture) - 3;
-    // int + uint = uint, so cast to avoid overflow; this can go above .frameCount
-    int32_t loadEnd = warmupStart + static_cast<int32_t>(FramesToReplayTotal);
+    /// However, note that when batchIndex = 0, we MUST use three frame 0 to keep history unpolluted.
+    /// E.g. For a 60-frame scene with 4 batches, {batchIndex, warmup frame indices} should be:
+	/// 0: {0,0,0}, 1: {12,13,14}, 2: {27,28,29}, 3: {42,43,44}
+    std::vector<size_t> indicesToLoad;
+    indicesToLoad.reserve(FramesToReplayTotal);
+    size_t idxFirstCaptureFrame = 0;
+    if (hackOptions.batchIndex == 0) {
+        indicesToLoad.insert(indicesToLoad.begin(), { 0u, 0u, 0u });
+    }
+    else {
+        // Now definitely bigger than FramesToCapture = 15
+        idxFirstCaptureFrame = hackOptions.batchIndex * FramesToCapture;
+        indicesToLoad.insert(indicesToLoad.begin(), { idxFirstCaptureFrame - 3, idxFirstCaptureFrame - 2, idxFirstCaptureFrame -1 });
+    }
+	assert((indicesToLoad.size() == 3));
+    for (size_t i = 0; i < FramesToCapture; ++i) {
+        indicesToLoad.push_back((idxFirstCaptureFrame + i) % totalInputFrames);
+	}
+    indicesToLoad.push_back((idxFirstCaptureFrame + FramesToCapture) % totalInputFrames);
 
     /// For last batch, e.g. frameCount = 50, we go from 42 to 49 then wrap around
-    for (int32_t i = warmupStart; i < loadEnd; ++i) {
-        size_t frameIdx = static_cast<size_t>(i < 0 ? i + hackOptions.frameCount : i) % hackOptions.frameCount;
-
+    for (size_t frameIdx : indicesToLoad) {
         auto loadedColor = textureCache->hackLoadColorFromFile(colorFiles[frameIdx].generic_string());
         hackLoadedColorsHDR.emplace_back(loadedColor);
         auto [loadedMV, loadedDepth] = textureCache->hackLoadMVDFromFile(mvdFiles[frameIdx].generic_string());
