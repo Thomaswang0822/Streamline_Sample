@@ -261,6 +261,11 @@ bool StreamlineSample::HackOptionDef::PostProcess()
         outPath = std::filesystem::path(hackPaths[0]).parent_path() / "outputs";
     }
 
+	// Defensive: create output folder if not exist
+    if (!std::filesystem::exists(outPath)) {
+        std::filesystem::create_directories(outPath);
+	}
+
     // Set frameCount to MVD count
     frameCount = static_cast<size_t>(std::count_if(
         std::filesystem::directory_iterator(hackPaths[1]),
@@ -1184,18 +1189,6 @@ bool StreamlineSample::LoadHackTextures(std::shared_ptr<donut::engine::TextureCa
                 textureCache->hackLoadJitterDataFromFilename(colorFiles[frameIdx].stem().generic_string())
             );
         }
-    }
-
-    // DEBUG tiled exr loading
-    {
-        //const std::filesystem::path tile_path("../media/TEST_SCENE/TILED_IN");
-        //// this would be 1
-        //std::vector<std::filesystem::path> tile_files = populatePathList(tile_path);
-        //const auto colorSize = hackLoadedColorsHDR.size();
-        //hackLoadedColorsHDR.clear();
-        //auto loadedTiledTexture =
-        //    textureCache->hackLoadColorFromFile(tile_files[0].generic_string());
-        //hackLoadedColorsHDR.resize(colorSize, loadedTiledTexture);
     }
 
     if (allSeenResolution.size() != 1) {
